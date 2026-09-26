@@ -202,7 +202,16 @@ method view(app: AppState): Widget =
             style = (if app.statusIsError: [StyleClass("error")]
                      else: [StyleClass("success")])
 
+const AppId = "dev.appmanager.AppManager"
+
+proc g_set_prgname(name: cstring) {.importc, cdecl.}
+proc gtk_window_set_default_icon_name(name: cstring) {.importc, cdecl.}
+
 when isMainModule:
   let cfg = loadConfig()
-  brew("dev.appmanager.AppManager",
-       gui(App(cfg = cfg, apps = findAppImages(cfg))))
+  # Without this the X11 WM_CLASS is the binary name ("AppRun.wrapped" inside
+  # the AppImage), so docks can't match the window to our .desktop file's
+  # StartupWMClass and show a generic icon.
+  g_set_prgname(AppId)
+  gtk_window_set_default_icon_name(AppId)
+  brew(AppId, gui(App(cfg = cfg, apps = findAppImages(cfg))))
