@@ -77,6 +77,9 @@ method view(app: AppState): Widget =
     Window:
       title = "AppImage Aliases"
       defaultSize = (760, 520)
+      # Shown by the "icon" button of the titlebar decoration layout; without
+      # one GTK draws a missing-image placeholder there.
+      iconName = "application-x-executable"
 
       HeaderBar {.addTitlebar.}:
         Button {.addLeft.}:
