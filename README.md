@@ -43,3 +43,28 @@ nimble build      # produces ./appmanager
 nimble test       # runs the core tests (no GTK needed)
 ./appmanager
 ```
+
+## AppImage
+
+Every push to `main` builds `appmanager-<version>-x86_64.AppImage` in CI
+([`.github/workflows/appimage.yml`](.github/workflows/appimage.yml)) and
+publishes it, with a matching `.zsync` file, as the latest GitHub release.
+Pushing a `v*` tag publishes that exact version instead.
+
+The AppImage embeds this update information:
+
+```
+gh-releases-zsync|codegod100|appmanager|latest|appmanager-*-x86_64.AppImage.zsync
+```
+
+This lets [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate),
+Gear Lever, AppImageLauncher and similar tools update it in place. They only
+download the blocks that changed.
+
+To build one locally (needs `zsync` for the `.zsync` file):
+
+```sh
+packaging/build-appimage.sh          # -> dist/appmanager-<version>-x86_64.AppImage
+```
+
+The icon source is [`data/dev.appmanager.AppManager.svg`](data/dev.appmanager.AppManager.svg).

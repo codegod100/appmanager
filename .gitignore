@@ -1,3 +1,5 @@
 /appmanager
 /tests/tcore
 nimcache/
+build/
+dist/

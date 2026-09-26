@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AppManager
+GenericName=AppImage Aliases
+Comment=Give installed AppImages a command-line alias on your PATH
+Exec=appmanager
+Icon=dev.appmanager.AppManager
+Terminal=false
+Categories=Utility;GTK;
+Keywords=AppImage;alias;PATH;launcher;
+StartupWMClass=dev.appmanager.AppManager
