@@ -207,6 +207,14 @@ const AppId = "dev.appmanager.AppManager"
 proc g_set_prgname(name: cstring) {.importc, cdecl.}
 proc gtk_window_set_default_icon_name(name: cstring) {.importc, cdecl.}
 
+proc sourceIconDirs(): seq[string] =
+  ## When run from a checkout (`./appmanager` or `src/appmanager`) the icon
+  ## isn't installed, so point GTK at the repo's hicolor tree. GTK only builds
+  ## window icons from theme directories, hence the hicolor layout.
+  for dir in [getAppDir() / "data" / "icons", getAppDir() / ".." / "data" / "icons"]:
+    if fileExists(dir / "hicolor" / "scalable" / "apps" / AppId & ".svg"):
+      result.add(dir.normalizedPath)
+
 when isMainModule:
   let cfg = loadConfig()
   # Without this the X11 WM_CLASS is the binary name ("AppRun.wrapped" inside
@@ -214,4 +222,5 @@ when isMainModule:
   # StartupWMClass and show a generic icon.
   g_set_prgname(AppId)
   gtk_window_set_default_icon_name(AppId)
-  brew(AppId, gui(App(cfg = cfg, apps = findAppImages(cfg))))
+  brew(AppId, gui(App(cfg = cfg, apps = findAppImages(cfg))),
+       icons = sourceIconDirs())

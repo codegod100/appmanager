@@ -45,7 +45,7 @@ if [ ! -x "$APP" ] || [ -n "${REBUILD:-}" ]; then
 fi
 
 mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
-cp data/$APP_ID.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/"
+cp data/icons/hicolor/scalable/apps/$APP_ID.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/"
 
 cd "$BUILD"
 rm -f "$LDAI_OUTPUT" "$LDAI_OUTPUT.zsync"
@@ -53,7 +53,7 @@ linuxdeploy \
   --appdir "$APPDIR" \
   --executable "$ROOT/$APP" \
   --desktop-file "$ROOT/data/$APP_ID.desktop" \
-  --icon-file "$ROOT/data/$APP_ID.png" \
+  --icon-file "$ROOT/data/icons/hicolor/256x256/apps/$APP_ID.png" \
   --plugin gtk \
   --output appimage
 

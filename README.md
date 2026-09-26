@@ -67,4 +67,4 @@ To build one locally (needs `zsync` for the `.zsync` file):
 packaging/build-appimage.sh          # -> dist/appmanager-<version>-x86_64.AppImage
 ```
 
-The icon source is [`data/dev.appmanager.AppManager.svg`](data/dev.appmanager.AppManager.svg).
+The icon source is [`data/icons/hicolor/scalable/apps/dev.appmanager.AppManager.svg`](data/icons/hicolor/scalable/apps/dev.appmanager.AppManager.svg).
