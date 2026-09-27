@@ -102,27 +102,6 @@ suite "core":
     check not fileExists(cfg.binDir / "t")
     check fileExists(cfg.binDir / "foreign")
 
-  test "setBinDir moves shims and updates PATH snippet":
-    let target = home / "t.AppImage"
-    writeFile(target, "#!/bin/sh\n")
-    writeFile(home / ".bashrc", "")
-    var cfg = defaultConfig()
-    cfg.setAlias(target, "t")
-    discard apply(cfg)
-    let oldDir = cfg.binDir
-    writeFile(oldDir / "foreign", "#!/bin/sh\n")
-    let newDir = home / "mybin"
-    cfg.setBinDir(newDir)
-    discard apply(cfg)
-    check cfg.binDir == newDir
-    check isManagedShim(newDir / "t")
-    check not fileExists(oldDir / "t")
-    check fileExists(oldDir / "foreign")
-    check loadConfig().binDir == newDir
-    let bashrc = readFile(home / ".bashrc")
-    check bashrc.count(PathBlockStart) == 1
-    check newDir in bashrc and oldDir notin bashrc
-
   test "does not overwrite files it did not create":
     let target = home / "t.AppImage"
     writeFile(target, "#!/bin/sh\n")

@@ -164,40 +164,11 @@ method view(app: AppState): Widget =
                       app.rescan()
 
       Box(orient = OrientY, spacing = 8, margin = 12):
-        Box(orient = OrientX, spacing = 8) {.expand: false.}:
-          Label:
-            text = app.pathHint()
-            xAlign = 0
-            wrap = true
-            style = [StyleClass("dim-label")]
-          Button {.expand: false.}:
-            text = "Change…"
-            tooltip = "Choose the folder aliases are written to"
-            proc clicked() =
-              let (res, state) = app.open: gui:
-                FileChooserDialog:
-                  title = "Folder for alias launchers"
-                  action = FileChooserSelectFolder
-                  DialogButton {.addButton.}:
-                    text = "Cancel"
-                    res = DialogCancel
-                  DialogButton {.addButton.}:
-                    text = "Use Folder"
-                    res = DialogAccept
-                    style = [ButtonSuggested]
-              if res.kind == DialogAccept:
-                let files = FileChooserDialogState(state).filenames
-                if files.len > 0:
-                  var cfg = app.cfg
-                  try:
-                    cfg.setBinDir(files[0])
-                  except OSError:
-                    app.fail("Could not clean up old aliases: " &
-                             getCurrentExceptionMsg())
-                    return
-                  app.cfg = cfg
-                  app.rescan()
-                  app.commit("Aliases now live in " & tildify(cfg.binDir))
+        Label {.expand: false.}:
+          text = app.pathHint()
+          xAlign = 0
+          wrap = true
+          style = [StyleClass("dim-label")]
 
         if app.apps.len == 0:
           Label:

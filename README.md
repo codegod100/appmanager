@@ -15,8 +15,7 @@ command-line alias, and puts those aliases on your `PATH`.
 - Suggests an alias from the file name (`Krita-5.2.2-x86_64.appimage` → `krita`).
   To accept it, press the ✓ button or Enter. You can also type your own.
 - For each alias it writes a small launcher script to
-  `~/.local/share/appmanager/bin/<alias>` (use **Change…** next to the folder
-  shown at the top of the window to pick a different one):
+  `~/.local/share/appmanager/bin/<alias>`:
 
   ```sh
   #!/bin/sh

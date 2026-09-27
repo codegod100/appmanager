@@ -264,18 +264,6 @@ proc syncShims*(cfg: Config): seq[string] =
     else:
       result.add("'" & alias & "' points to a missing file: " & target)
 
-proc setBinDir*(cfg: var Config, dir: string) =
-  ## Moves aliases to `dir`: removes the launchers appmanager wrote into the
-  ## old bin dir (anything else there is left alone). Call `apply` afterwards
-  ## to write them into the new one and update PATH.
-  let dir = dir.normalizedPath
-  if dir == cfg.binDir.normalizedPath: return
-  if dirExists(cfg.binDir):
-    for kind, path in walkDir(cfg.binDir):
-      if isManagedShim(path):
-        removeFile(path)
-  cfg.binDir = dir
-
 # ---------------------------------------------------------------------------
 # PATH
 
