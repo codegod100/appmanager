@@ -48,13 +48,14 @@ nimble test       # runs the core tests (no GTK needed)
 
 Every push to `main` builds `appmanager-<version>-x86_64.AppImage` in CI
 ([`.github/workflows/appimage.yml`](.github/workflows/appimage.yml)) and
-publishes it, with a matching `.zsync` file, as the latest GitHub release.
-Pushing a `v*` tag publishes that exact version instead.
+publishes it, with a matching `.zsync` file, to the single rolling GitHub
+release tagged [`release`](https://github.com/codegod100/appmanager/releases/tag/release).
+Each build replaces the previous one; there are no versioned releases.
 
 The AppImage embeds this update information:
 
 ```
-gh-releases-zsync|codegod100|appmanager|latest|appmanager-*-x86_64.AppImage.zsync
+gh-releases-zsync|codegod100|appmanager|release|appmanager-*-x86_64.AppImage.zsync
 ```
 
 This lets [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate),

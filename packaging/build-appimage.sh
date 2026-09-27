@@ -21,7 +21,7 @@ BUILD=$ROOT/build/appimage
 TOOLS=$BUILD/tools
 APPDIR=$BUILD/AppDir
 
-export UPDATE_INFORMATION=${UPDATE_INFORMATION:-"gh-releases-zsync|${REPO%%/*}|${REPO##*/}|latest|$APP-*-$ARCH.AppImage.zsync"}
+export UPDATE_INFORMATION=${UPDATE_INFORMATION:-"gh-releases-zsync|${REPO%%/*}|${REPO##*/}|release|$APP-*-$ARCH.AppImage.zsync"}
 export LDAI_UPDATE_INFORMATION=$UPDATE_INFORMATION
 export LDAI_OUTPUT=$APP-$VERSION-$ARCH.AppImage
 export OUTPUT=$LDAI_OUTPUT
