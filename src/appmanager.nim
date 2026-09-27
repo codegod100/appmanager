@@ -15,6 +15,7 @@ renderable SelectableLabel of BaseWidget:
   text: string
   xAlign: float = 0.5
   ellipsize: EllipsizeMode
+  wrap: bool
 
   hooks:
     beforeBuild:
@@ -33,6 +34,10 @@ renderable SelectableLabel of BaseWidget:
     property:
       gtk_label_set_ellipsize(state.internalWidget,
                               PangoEllipsizeMode(ord(state.ellipsize)))
+
+  hooks wrap:
+    property:
+      gtk_label_set_wrap(state.internalWidget, cbool(ord(state.wrap)))
 
 viewable App:
   cfg: Config
@@ -93,12 +98,12 @@ proc saveAlias(app: AppState, path, alias: string) =
 
 proc pathHint(app: AppState): string =
   if app.cfg.binDirOnPath:
-    "Aliases live in " & tildify(app.cfg.binDir) & " (on your PATH)"
+    "Aliases live in " & app.cfg.binDir & " (on your PATH)"
   elif app.cfg.pathSnippetInstalled:
-    "Aliases live in " & tildify(app.cfg.binDir) &
+    "Aliases live in " & app.cfg.binDir &
       " — open a new terminal (or log out and back in) to pick up the PATH change"
   else:
-    "Aliases live in " & tildify(app.cfg.binDir) &
+    "Aliases live in " & app.cfg.binDir &
       " — save an alias to add this folder to your PATH"
 
 method view(app: AppState): Widget =
@@ -164,7 +169,7 @@ method view(app: AppState): Widget =
                       app.rescan()
 
       Box(orient = OrientY, spacing = 8, margin = 12):
-        Label {.expand: false.}:
+        SelectableLabel {.expand: false.}:
           text = app.pathHint()
           xAlign = 0
           wrap = true
