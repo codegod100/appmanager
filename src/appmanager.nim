@@ -5,6 +5,8 @@ import std/[os, strutils, tables]
 import owlkettle
 import appmanager/core
 
+const AppId = "dev.appmanager.AppManager"
+
 viewable App:
   cfg: Config
   apps: seq[AppImage]
@@ -79,7 +81,7 @@ method view(app: AppState): Widget =
       defaultSize = (760, 520)
       # Shown by the "icon" button of the titlebar decoration layout; without
       # one GTK draws a missing-image placeholder there.
-      iconName = "application-x-executable"
+      iconName = AppId
 
       HeaderBar {.addTitlebar.}:
         Button {.addLeft.}:
@@ -205,7 +207,7 @@ method view(app: AppState): Widget =
             style = (if app.statusIsError: [StyleClass("error")]
                      else: [StyleClass("success")])
 
-const AppId = "dev.appmanager.AppManager"
+const AppIconSvg = staticRead("../data/icons/hicolor/scalable/apps/" & AppId & ".svg")
 
 proc g_set_prgname(name: cstring) {.importc, cdecl.}
 proc gtk_window_set_default_icon_name(name: cstring) {.importc, cdecl.}
@@ -218,6 +220,21 @@ proc sourceIconDirs(): seq[string] =
     if fileExists(dir / "hicolor" / "scalable" / "apps" / AppId & ".svg"):
       result.add(dir.normalizedPath)
 
+proc embeddedIconDir(): seq[string] =
+  ## Fallback for a binary installed without its icon (e.g. `nimble install`):
+  ## write the icon compiled into the binary to a private hicolor tree, so the
+  ## titlebar and window icon never fall back to a placeholder.
+  let
+    dir = getCacheDir("appmanager") / "icons"
+    file = dir / "hicolor" / "scalable" / "apps" / AppId & ".svg"
+  try:
+    if not fileExists(file) or readFile(file) != AppIconSvg:
+      createDir(file.parentDir)
+      writeFile(file, AppIconSvg)
+    result.add(dir)
+  except OSError, IOError:
+    discard
+
 when isMainModule:
   let cfg = loadConfig()
   # Without this the X11 WM_CLASS is the binary name ("AppRun.wrapped" inside
@@ -226,4 +243,4 @@ when isMainModule:
   g_set_prgname(AppId)
   gtk_window_set_default_icon_name(AppId)
   brew(AppId, gui(App(cfg = cfg, apps = findAppImages(cfg))),
-       icons = sourceIconDirs())
+       icons = sourceIconDirs() & embeddedIconDir())
