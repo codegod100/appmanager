@@ -195,7 +195,7 @@ method view(app: AppState): Widget =
                         ellipsize = EllipsizeEnd
                         style = [LabelHeading]
                       SelectableLabel:
-                        text = tildify(path)
+                        text = path
                         xAlign = 0
                         ellipsize = EllipsizeMiddle
                         tooltip = path
