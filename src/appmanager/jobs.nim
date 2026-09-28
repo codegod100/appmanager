@@ -10,6 +10,7 @@ const PollMs = 100
 type
   DoneProc* = proc(code: int, output: string)
   ProgressProc* = proc(fraction: float)
+  BytesProc* = proc(bytes: BiggestInt)
 
 var tempCounter = 0
 
@@ -49,15 +50,22 @@ proc curlError(url: string, code: int, output: string): string =
     result.add(" (GitHub rate limit? Set GITHUB_TOKEN to raise it)")
 
 proc download*(url, dest: string, onDone: proc(error: string),
-               range = "", expected: BiggestInt = 0, onProgress: ProgressProc = nil) =
+               range = "", expected: BiggestInt = 0, onProgress: ProgressProc = nil,
+               onBytes: BytesProc = nil) =
   ## Downloads `url` to `dest`; `onDone` gets "" on success or an error.
+  ## `onProgress` reports the fraction done when `expected` is known;
+  ## `onBytes` reports how much has arrived so far either way.
   if not (url.startsWith("https://") or url.startsWith("http://")):
     onDone("not a web address: " & url)
     return
   proc poll() =
+    if onProgress == nil and onBytes == nil: return
+    var size: BiggestInt
+    try: size = getFileSize(dest)
+    except OSError: return
+    if onBytes != nil: onBytes(size)
     if onProgress != nil and expected > 0:
-      try: onProgress(min(1.0, getFileSize(dest).float / expected.float))
-      except OSError: discard
+      onProgress(min(1.0, size.float / expected.float))
   runAsync("curl", curlArgs(url, dest, range),
     proc(code: int, output: string) =
       if code == 0: onDone("")
