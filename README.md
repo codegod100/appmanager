@@ -73,6 +73,15 @@ one it installed. **Update** downloads the new build next to the old one,
 checks its SHA-1 when it can, and then replaces the old file. The path
 doesn't change, so aliases and menu entries keep working.
 
+### Keeping AppImages in one place
+
+If any AppImages live outside `~/Applications` (in `~/Downloads`, say), a
+banner offers to move them there. Each AppImage's ⋯ menu also has a
+**Move to ~/Applications** item. The alias, update source and menu entry
+follow the file to its new path. Nothing is overwritten: if a file with
+the same name is already there, that AppImage stays where it is.
+Symlinks are left alone. **Don't ask again** hides the banner for good.
+
 ### App menu and removal
 
 In the ⋯ menu, **Add to app menu** extracts the AppImage's `.desktop` file

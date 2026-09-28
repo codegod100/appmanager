@@ -6,7 +6,7 @@
 ## hand the results to the parsers below, which keeps this module testable
 ## and lets the GUI run downloads without blocking.
 
-import std/[os, strutils, json, algorithm, osproc, streams, times, tables]
+import std/[os, strutils, json, algorithm, osproc, streams, times, tables, sequtils]
 import core
 
 const
@@ -736,6 +736,43 @@ proc refreshMenus*() =
   let tool = findExe("update-desktop-database")
   if tool.len > 0:
     discard runWithTimeout(tool, @["-q", applicationsDir()], getTempDir(), 5_000)
+
+# ---------------------------------------------------------------------------
+# Moving to a central folder
+
+proc isInside*(path, dir: string): bool =
+  path.normalizedPath.startsWith(dir.normalizedPath & "/")
+
+proc needsMove*(path: string, dir = defaultInstallDir()): bool =
+  ## Whether the AppImage at `path` lives outside `dir`. Symlinks are left
+  ## alone: they usually already point into it.
+  fileExists(path) and not symlinkExists(path) and not path.isInside(dir)
+
+proc relocate*(cfg: var Config, src, destDir: string, notes: var seq[string]): string =
+  ## Moves the AppImage at `src` into `destDir` and points its alias, update
+  ## source and menu entry at the new path, which it returns. Raises
+  ## OSError when the move fails or a file of that name is already there.
+  ## The caller must `apply` the config afterwards if `src` had an alias.
+  result = destDir / src.extractFilename
+  if fileExists(result) or symlinkExists(result) or dirExists(result):
+    raise newException(OSError, tildify(result) & " already exists")
+  let integrated = isIntegrated(src)
+  createDir(destDir)
+  moveFile(src, result)
+  let alias = cfg.aliasFor(src)
+  if alias.len > 0: cfg.aliases[alias] = result
+  if src in cfg.installs:
+    cfg.installs[result] = cfg.installs[src]
+    cfg.installs.del(src)
+  if not cfg.scanDirs.anyIt(expandTilde(it).normalizedPath == destDir.normalizedPath):
+    cfg.scanDirs.add(destDir)
+  if integrated:
+    discard unintegrate(src)
+    try:
+      discard integrate(result)
+    except OSError, IOError:
+      notes.add("Could not re-add " & result.extractFilename & " to the app menu: " &
+                getCurrentExceptionMsg())
 
 # ---------------------------------------------------------------------------
 # Uninstalling

@@ -29,6 +29,7 @@ type
     binDir*: string                     ## Where alias shims are written
     aliases*: OrderedTable[string, string] ## alias -> AppImage path
     installs*: OrderedTable[string, InstallInfo] ## AppImage path -> install info
+    offerMove*: bool                    ## Offer to move stray AppImages to ~/Applications
 
   AliasError* = object of CatchableError
 
@@ -40,6 +41,12 @@ proc xdgDir(envVar, fallback: string): string =
   ## XDG spec requires.
   let dir = getEnv(envVar)
   if dir.len > 0: dir else: getHomeDir() / fallback
+
+proc tildify*(path: string): string =
+  ## Abbreviates the home directory to "~" for display.
+  let home = getHomeDir().strip(leading = false, chars = {'/'})
+  if path == home or path.startsWith(home & "/"): "~" & path[home.len .. ^1]
+  else: path
 
 proc configDir*(): string =
   xdgDir("XDG_CONFIG_HOME", ".config") / "appmanager"
@@ -64,7 +71,7 @@ proc defaultScanDirs*(): seq[string] =
 proc defaultConfig*(): Config =
   Config(scanDirs: defaultScanDirs(), binDir: defaultBinDir(),
          aliases: initOrderedTable[string, string](),
-         installs: initOrderedTable[string, InstallInfo]())
+         installs: initOrderedTable[string, InstallInfo](), offerMove: true)
 
 proc toJson*(cfg: Config): JsonNode =
   var aliases = newJObject()
@@ -75,7 +82,7 @@ proc toJson*(cfg: Config): JsonNode =
     installs[path] = %*{"source": info.source, "tag": info.tag,
                         "asset": info.asset, "assetId": info.assetId}
   %*{"scanDirs": cfg.scanDirs, "binDir": cfg.binDir, "aliases": aliases,
-     "installs": installs}
+     "installs": installs, "offerMove": cfg.offerMove}
 
 proc fromJson*(node: JsonNode): Config =
   result = defaultConfig()
@@ -91,6 +98,8 @@ proc fromJson*(node: JsonNode): Config =
     for alias, target in node["aliases"]:
       if target.kind == JString:
         result.aliases[alias] = target.getStr
+  if node.hasKey("offerMove") and node["offerMove"].kind == JBool:
+    result.offerMove = node["offerMove"].getBool
   if node.hasKey("installs") and node["installs"].kind == JObject:
     for path, info in node["installs"]:
       if info.kind != JObject: continue
