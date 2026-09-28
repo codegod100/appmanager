@@ -16,10 +16,19 @@ type
     path*: string   ## Absolute path to the AppImage file
     name*: string   ## File name without the .AppImage extension
 
+  InstallInfo* = object
+    ## Where an AppImage's updates come from and which build is installed.
+    source*: string      ## "owner/repo" on GitHub or a .zsync URL; "" means
+                         ## use the update information embedded in the file
+    tag*: string         ## Release tag of the installed build
+    asset*: string       ## Release asset name of the installed build
+    assetId*: BiggestInt ## GitHub asset id of the installed build (0 = unknown)
+
   Config* = object
     scanDirs*: seq[string]              ## Directories searched for AppImages
     binDir*: string                     ## Where alias shims are written
     aliases*: OrderedTable[string, string] ## alias -> AppImage path
+    installs*: OrderedTable[string, InstallInfo] ## AppImage path -> install info
 
   AliasError* = object of CatchableError
 
@@ -54,13 +63,19 @@ proc defaultScanDirs*(): seq[string] =
 
 proc defaultConfig*(): Config =
   Config(scanDirs: defaultScanDirs(), binDir: defaultBinDir(),
-         aliases: initOrderedTable[string, string]())
+         aliases: initOrderedTable[string, string](),
+         installs: initOrderedTable[string, InstallInfo]())
 
 proc toJson*(cfg: Config): JsonNode =
   var aliases = newJObject()
   for alias, target in cfg.aliases:
     aliases[alias] = %target
-  %*{"scanDirs": cfg.scanDirs, "binDir": cfg.binDir, "aliases": aliases}
+  var installs = newJObject()
+  for path, info in cfg.installs:
+    installs[path] = %*{"source": info.source, "tag": info.tag,
+                        "asset": info.asset, "assetId": info.assetId}
+  %*{"scanDirs": cfg.scanDirs, "binDir": cfg.binDir, "aliases": aliases,
+     "installs": installs}
 
 proc fromJson*(node: JsonNode): Config =
   result = defaultConfig()
@@ -76,6 +91,12 @@ proc fromJson*(node: JsonNode): Config =
     for alias, target in node["aliases"]:
       if target.kind == JString:
         result.aliases[alias] = target.getStr
+  if node.hasKey("installs") and node["installs"].kind == JObject:
+    for path, info in node["installs"]:
+      if info.kind != JObject: continue
+      result.installs[path] = InstallInfo(
+        source: info{"source"}.getStr, tag: info{"tag"}.getStr,
+        asset: info{"asset"}.getStr, assetId: info{"assetId"}.getBiggestInt)
 
 proc loadConfig*(path = configPath()): Config =
   if not fileExists(path):
@@ -159,6 +180,9 @@ proc findAppImages*(cfg: Config): seq[AppImage] =
 
 # ---------------------------------------------------------------------------
 # Aliases
+
+proc installFor*(cfg: Config, path: string): InstallInfo =
+  cfg.installs.getOrDefault(path)
 
 proc isValidAlias*(alias: string): bool =
   if alias.len == 0 or alias.len > 64: return false

@@ -3,3 +3,4 @@
 nimcache/
 build/
 dist/
+/tests/tstore
