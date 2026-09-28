@@ -6,7 +6,7 @@
 ## hand the results to the parsers below, which keeps this module testable
 ## and lets the GUI run downloads without blocking.
 
-import std/[os, strutils, json, algorithm, osproc, streams, times, tables]
+import std/[os, strutils, json, algorithm, osproc, streams, times, tables, sequtils]
 import core
 
 const
@@ -689,6 +689,133 @@ proc refreshMenus*() =
   let tool = findExe("update-desktop-database")
   if tool.len > 0:
     discard runWithTimeout(tool, @["-q", applicationsDir()], getTempDir(), 5_000)
+
+# ---------------------------------------------------------------------------
+# Opening AppImages from the file manager
+
+const
+  AppImageMimeTypes* = ["application/vnd.appimage", "application/x-iso9660-appimage"]
+  SelfMarkerKey = "X-AppManager-Self"
+
+proc userConfigHome(): string =
+  let dir = getEnv("XDG_CONFIG_HOME")
+  if dir.len > 0: dir else: getHomeDir() / ".config"
+
+proc mimeappsLists*(): seq[string] =
+  ## The user's mimeapps.list files, highest precedence first (XDG MIME
+  ## Applications spec): desktop-specific ones, then the generic one, then
+  ## the deprecated copy in the applications folder.
+  for desktop in getEnv("XDG_CURRENT_DESKTOP").toLowerAscii.split(':'):
+    if desktop.len > 0:
+      result.add(userConfigHome() / desktop & "-mimeapps.list")
+  result.add(userConfigHome() / "mimeapps.list")
+  result.add(applicationsDir() / "mimeapps.list")
+
+proc listValue(value: string): seq[string] =
+  for id in value.split(';'):
+    if id.strip.len > 0: result.add(id.strip)
+
+proc defaultFor*(content, mimeType: string): string =
+  ## The first desktop file named for `mimeType` under [Default Applications]
+  ## in a mimeapps.list, or "".
+  var group = ""
+  for line in content.splitLines:
+    let t = line.strip
+    if t.startsWith("["): group = t
+    elif group == "[Default Applications]":
+      let eq = t.find('=')
+      if eq > 0 and t[0 ..< eq].strip == mimeType:
+        let ids = listValue(t[eq + 1 .. ^1])
+        return if ids.len > 0: ids[0] else: ""
+
+proc setDefaultApp*(content, desktopFile: string,
+                    mimeTypes: openArray[string]): string =
+  ## Makes `desktopFile` the default for `mimeTypes` in a mimeapps.list and
+  ## lists it under [Added Associations], keeping everything else.
+  let mimeTypes = @mimeTypes
+  var lines: seq[string]
+  var seen: seq[string]
+  var group = ""
+  proc closeGroup() =
+    if group notin ["[Default Applications]", "[Added Associations]"]: return
+    while lines.len > 0 and lines[^1].strip.len == 0: lines.setLen(lines.len - 1)
+    for mime in mimeTypes:
+      if group == "[Default Applications]":
+        lines.add(mime & "=" & desktopFile & ";")
+      elif (group & mime) notin seen:
+        lines.add(mime & "=" & desktopFile & ";")
+    lines.add("")
+    seen.add(group)
+  for line in content.splitLines:
+    let t = line.strip
+    if t.startsWith("[") and t.endsWith("]"):
+      closeGroup()
+      group = t
+      lines.add(line)
+      continue
+    let eq = t.find('=')
+    let key = if eq > 0: t[0 ..< eq].strip else: ""
+    if key in mimeTypes:
+      if group == "[Default Applications]": continue
+      if group == "[Added Associations]":
+        var ids = listValue(t[eq + 1 .. ^1])
+        ids.keepItIf(it != desktopFile)
+        lines.add(key & "=" & (@[desktopFile] & ids).join(";") & ";")
+        seen.add(group & key)
+        continue
+    lines.add(line)
+  closeGroup()
+  for g in ["[Default Applications]", "[Added Associations]"]:
+    if g notin seen:
+      while lines.len > 0 and lines[^1].strip.len == 0: lines.setLen(lines.len - 1)
+      if lines.len > 0: lines.add("")
+      lines.add(g)
+      group = g
+      closeGroup()
+  lines.join("\n").strip(leading = false) & "\n"
+
+proc selfExecutable*(): string =
+  ## How to start this program again: the AppImage it runs from, if any.
+  let appImage = getEnv("APPIMAGE")
+  if appImage.len > 0 and fileExists(appImage): appImage else: getAppFilename()
+
+proc selfDesktopEntry*(appId, exe: string): string =
+  ## A menu entry for appmanager itself that opens AppImages with it.
+  "[Desktop Entry]\nType=Application\nName=AppManager\n" &
+    "GenericName=AppImage Manager\n" &
+    "Comment=Find, install, update and alias AppImages\n" &
+    "Exec=" & desktopExecArg(exe) & " %F\nIcon=" & appId & "\n" &
+    "Terminal=false\nCategories=Utility;GTK;\n" &
+    "MimeType=" & AppImageMimeTypes.join(";") & ";\n" &
+    "StartupWMClass=" & appId & "\n" & SelfMarkerKey & "=true\n"
+
+proc appImageHandler*(): string =
+  ## The desktop file the user's mimeapps.list files pick for AppImages,
+  ## or "" when they don't name one (the desktop then picks any app that
+  ## accepts AppImages, e.g. Gear Lever).
+  for list in mimeappsLists():
+    if not fileExists(list): continue
+    let id = try: defaultFor(readFile(list), AppImageMimeTypes[0])
+             except IOError: ""
+    if id.len > 0: return id
+
+proc makeAppImageHandler*(appId: string, exe = selfExecutable()) =
+  ## Makes double-clicking an AppImage open appmanager: writes a menu entry
+  ## for it that accepts AppImages (unless another tool installed one) and
+  ## makes that the default in the user's mimeapps.list files.
+  let desktopFile = appId & ".desktop"
+  let entry = applicationsDir() / desktopFile
+  if not fileExists(entry) or (SelfMarkerKey & "=true") in readFile(entry):
+    createDir(applicationsDir())
+    writeFile(entry, selfDesktopEntry(appId, exe))
+  for list in mimeappsLists():
+    # Always write the generic list; the others only matter if they exist,
+    # since they would otherwise override it.
+    if list != userConfigHome() / "mimeapps.list" and not fileExists(list): continue
+    let content = if fileExists(list): readFile(list) else: ""
+    createDir(list.parentDir)
+    writeFile(list, setDefaultApp(content, desktopFile, AppImageMimeTypes))
+  refreshMenus()
 
 # ---------------------------------------------------------------------------
 # Uninstalling
