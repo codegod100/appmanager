@@ -1273,10 +1273,19 @@ var
   appConfig: AppConfig
   mainState: AppState
 
+proc g_application_quit(app: GApplication) {.importc, cdecl.}
+
+proc onWindowDestroyed(window: GtkWidget, gapp: pointer) {.cdecl.} =
+  # GApplication only exits once nothing holds it any more; closing the main
+  # window means we're done, whatever else is still registered or running.
+  g_application_quit(GApplication(gapp))
+
 proc presentWindow(gapp: GApplication) =
   if mainState.isNil:
     mainState = AppState(setupApp(appConfig))
-    gtk_application_add_window(gapp, mainState.unwrapInternalWidget())
+    let window = mainState.unwrapInternalWidget()
+    gtk_application_add_window(gapp, window)
+    discard g_signal_connect(window, "destroy", onWindowDestroyed, gapp.pointer)
   gtk_window_present(mainState.unwrapInternalWidget())
 
 proc onActivate(gapp: GApplication, data: pointer) {.cdecl.} =
@@ -1299,6 +1308,8 @@ proc run(widget: Widget, icons: seq[string]) =
   discard g_signal_connect(gapp, "activate", onActivate, nil)
   discard g_signal_connect(gapp, "open", onOpen, nil)
   discard g_application_run(gapp)
+  # Don't linger on anything left behind (pending jobs, nested dialog loops).
+  quit(QuitSuccess)
 
 when isMainModule:
   let cfg = loadConfig()
