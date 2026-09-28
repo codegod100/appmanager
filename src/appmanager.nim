@@ -6,6 +6,7 @@
 import std/[os, strutils, tables, sets, json, sequtils]
 import owlkettle
 import owlkettle/bindings/gtk
+import owlkettle/mainloop
 import appmanager/[core, store, jobs]
 
 const
@@ -52,6 +53,9 @@ viewable App:
   checkQueue: seq[string]
   checksRunning: int
   moveOfferHidden: bool           ## "Not now" on the move banner
+
+  opened: seq[string]  ## AppImages opened from the file manager, awaiting a choice
+  handler: string      ## Desktop file that opens AppImages ("" = unknown)
 
 proc rescan(app: AppState) =
   app.apps = findAppImages(app.cfg)
@@ -503,12 +507,10 @@ proc installedRepos(app: AppState): HashSet[string] =
     if src.kind == GitHubReleases and fileExists(path):
       result.incl((src.owner & "/" & src.repo).toLowerAscii)
 
-proc finishInstall(app: AppState, dest, repo: string, asset: ReleaseAsset) =
-  ## Records a freshly downloaded AppImage, adds it to the app menu and
-  ## gives it an alias when the obvious one is free.
+proc settleIn(app: AppState, dest, name: string) =
+  ## Adds a newly installed AppImage to the app menu and gives it an alias
+  ## when the obvious one is free.
   var notes: seq[string]
-  app.cfg.installs[dest] = InstallInfo(source: repo, tag: asset.tag,
-                                       asset: asset.name, assetId: asset.id)
   if not app.cfg.scanDirs.anyIt(expandTilde(it).normalizedPath == dest.parentDir.normalizedPath):
     app.cfg.scanDirs.add(dest.parentDir)
   try:
@@ -517,7 +519,7 @@ proc finishInstall(app: AppState, dest, repo: string, asset: ReleaseAsset) =
   except OSError, IOError:
     notes.add("Could not add it to the app menu: " & getCurrentExceptionMsg())
   let alias = suggestAlias(dest.extractFilename)
-  var msg = "Installed " & asset.name
+  var msg = "Installed " & name
   var aliased = false
   if alias.len > 0 and not app.cfg.aliases.hasKey(alias) and
       app.cfg.shadowedCommand(alias).len == 0:
@@ -528,7 +530,6 @@ proc finishInstall(app: AppState, dest, repo: string, asset: ReleaseAsset) =
     except AliasError:
       discard
   app.rescan()
-  app.updates[dest] = UpdateStatus(state: UpToDate)
   if not aliased:
     app.save()
     app.report(notes, msg)
@@ -536,8 +537,15 @@ proc finishInstall(app: AppState, dest, repo: string, asset: ReleaseAsset) =
   try:
     app.report(apply(app.cfg) & notes, msg)
   except OSError, IOError:
-    app.fail("Installed " & asset.name & " but could not write aliases: " &
+    app.fail("Installed " & name & " but could not write aliases: " &
              getCurrentExceptionMsg())
+
+proc finishInstall(app: AppState, dest, repo: string, asset: ReleaseAsset) =
+  ## Records a freshly downloaded AppImage and settles it in.
+  app.cfg.installs[dest] = InstallInfo(source: repo, tag: asset.tag,
+                                       asset: asset.name, assetId: asset.id)
+  app.settleIn(dest, asset.name)
+  app.updates[dest] = UpdateStatus(state: UpToDate)
 
 proc install(app: AppState, item: CatalogApp) =
   ## Downloads the newest AppImage release of `item` into ~/Applications.
@@ -617,6 +625,78 @@ proc switchTo(app: AppState, page: Page) =
   if page == PageBrowse and app.source.isCatalog and app.catalogs[app.source].len == 0:
     app.loadCatalog(app.source)
 
+# ---------------------------------------------------------------------------
+# AppImages opened from the file manager
+
+proc makeExecutable(path: string) =
+  if fpUserExec notin getFilePermissions(path):
+    setFilePermissions(path, getFilePermissions(path) + {fpUserExec})
+
+proc openFiles(app: AppState, paths: seq[string]) =
+  ## Called when the desktop opens files with appmanager, e.g. when the user
+  ## double-clicks an AppImage.
+  app.switchTo(PageInstalled)
+  var rejected: seq[string]
+  for path in paths:
+    let path = path.absolutePath.normalizedPath
+    if not isAppImage(path): rejected.add(path.extractFilename)
+    elif path notin app.opened: app.opened.add(path)
+  if rejected.len > 0:
+    app.fail("Not an AppImage: " & rejected.join(", "))
+
+proc launch(app: AppState, path: string) =
+  let name = path.extractFilename
+  try:
+    makeExecutable(path)
+  except OSError:
+    app.fail("Could not make " & name & " executable: " & getCurrentExceptionMsg())
+    return
+  # Through a backgrounded shell, so the app outlives us and isn't our child.
+  runAsync("/bin/sh", @["-c", "\"$0\" </dev/null >/dev/null 2>&1 &", path],
+           proc(code: int, output: string) = discard)
+  app.report(@[], "Started " & name)
+
+proc adopt(app: AppState, path: string) =
+  ## Installs an AppImage opened from the file manager: moves it to
+  ## ~/Applications (keeping any alias, update source and menu entry), then
+  ## adds it to the app menu and gives it an alias.
+  let name = path.extractFilename
+  var dest = path
+  if needsMove(path):
+    let hadAlias = app.cfg.aliasFor(path).len > 0
+    var notes: seq[string]
+    try:
+      dest = app.cfg.relocate(path, defaultInstallDir(), notes)
+      app.renamePath(path, dest)
+      # Its launcher must point at the new path.
+      if hadAlias: discard apply(app.cfg)
+    except OSError, IOError:
+      app.fail("Could not move " & name & ": " & getCurrentExceptionMsg())
+      return
+  try:
+    makeExecutable(dest)
+  except OSError:
+    discard  # integrate() reports it
+  app.opened.keepItIf(it != path)
+  app.settleIn(dest, name)
+
+proc makeDefaultHandler(app: AppState) =
+  try:
+    makeAppImageHandler(AppId)
+    app.handler = appImageHandler()
+    app.report(@[], "Double-clicking an AppImage now opens AppManager")
+  except OSError, IOError:
+    app.fail("Could not change the default app: " & getCurrentExceptionMsg())
+
+proc handlerText(app: AppState): string =
+  if app.handler == AppId & ".desktop":
+    "Double-clicking an AppImage opens it here, where you can run or install it."
+  elif app.handler.len > 0:
+    "Double-clicking an AppImage currently opens " &
+      app.handler.replace(".desktop", "") & "."
+  else:
+    "Your desktop picks which app opens AppImages (for example Gear Lever)."
+
 method view(app: AppState): Widget =
   result = gui:
     Window:
@@ -653,6 +733,28 @@ method view(app: AppState): Widget =
               app.loadCatalog(app.source, force = true)
             else:
               app.searchGitHub()
+
+        MenuButton {.addRight.}:
+          icon = "open-menu-symbolic"
+          tooltip = "Opening AppImages"
+          Popover:
+            Box(orient = OrientY, spacing = 8, margin = 8, sizeRequest = (360, -1)):
+              Label {.expand: false.}:
+                text = "Opening AppImages"
+                xAlign = 0
+                style = [LabelHeading]
+              Label {.expand: false.}:
+                text = app.handlerText()
+                xAlign = 0
+                wrap = true
+              Box(orient = OrientX) {.expand: false.}:
+                Button {.expand: false.}:
+                  text = "Open AppImages with AppManager"
+                  tooltip = "Make AppManager the default app for AppImage files"
+                  style = [ButtonSuggested]
+                  sensitive = app.handler != AppId & ".desktop"
+                  proc clicked() =
+                    app.makeDefaultHandler()
 
         MenuButton {.addRight.}:
           icon = "folder-symbolic"
@@ -722,6 +824,42 @@ method view(app: AppState): Widget =
               proc clicked() =
                 copyToClipboard(app.cfg.binDir)
                 app.report(@[], "Copied " & app.cfg.binDir)
+
+          for path in app.opened:
+            let path = path
+            Frame {.expand: false.}:
+              Box(orient = OrientX, spacing = 8, margin = 8):
+                Box(orient = OrientY, spacing = 2):
+                  Label:
+                    text = "Opened " & path.extractFilename
+                    xAlign = 0
+                    ellipsize = EllipsizeEnd
+                    style = [LabelHeading]
+                  Label:
+                    text = tildify(path)
+                    xAlign = 0
+                    ellipsize = EllipsizeMiddle
+                    tooltip = path
+                    style = [StyleClass("dim-label"), StyleClass("caption")]
+                Button {.expand: false, vAlign: AlignCenter.}:
+                  text = "Run"
+                  tooltip = "Start " & path.extractFilename
+                  proc clicked() =
+                    app.launch(path)
+                Button {.expand: false, vAlign: AlignCenter.}:
+                  text = "Install"
+                  tooltip = (if needsMove(path): "Move it to " & tildify(defaultInstallDir()) & ", "
+                             else: "") &
+                            "add it to the app menu and give it an alias"
+                  style = [ButtonSuggested]
+                  proc clicked() =
+                    app.adopt(path)
+                Button {.expand: false, vAlign: AlignCenter.}:
+                  icon = "window-close-symbolic"
+                  tooltip = "Dismiss"
+                  style = [ButtonFlat]
+                  proc clicked() =
+                    app.opened.keepItIf(it != path)
 
           let strays = if app.cfg.offerMove and not app.moveOfferHidden: app.moveCandidates()
                        else: @[]
@@ -1046,6 +1184,47 @@ proc embeddedIconDir(): seq[string] =
   except OSError, IOError:
     discard
 
+# ---------------------------------------------------------------------------
+# Application
+#
+# Like owlkettle's `brew`, but the GtkApplication also accepts files, so the
+# desktop can open AppImages with us. GApplication is single-instance: a
+# second launch hands its files to the running window instead of opening
+# another one.
+
+const G_APPLICATION_HANDLES_OPEN = GApplicationFlags(1 shl 2)
+
+var
+  appConfig: AppConfig
+  mainState: AppState
+
+proc presentWindow(gapp: GApplication) =
+  if mainState.isNil:
+    mainState = AppState(setupApp(appConfig))
+    gtk_application_add_window(gapp, mainState.unwrapInternalWidget())
+  gtk_window_present(mainState.unwrapInternalWidget())
+
+proc onActivate(gapp: GApplication, data: pointer) {.cdecl.} =
+  presentWindow(gapp)
+
+proc onOpen(gapp: GApplication, files: ptr UncheckedArray[GFile], count: cint,
+            hint: cstring, data: pointer) {.cdecl.} =
+  presentWindow(gapp)
+  var paths: seq[string]
+  for i in 0 ..< count.int:
+    let path = g_file_get_path(files[i])
+    if not path.cstring.isNil: paths.add($path)
+  mainState.openFiles(paths)
+  mainState.refresh()
+
+proc run(widget: Widget, icons: seq[string]) =
+  appConfig = AppConfig(widget: widget, icons: icons)
+  let gapp = gtk_application_new(AppId.cstring, G_APPLICATION_HANDLES_OPEN)
+  defer: g_object_unref(gapp.pointer)
+  discard g_signal_connect(gapp, "activate", onActivate, nil)
+  discard g_signal_connect(gapp, "open", onOpen, nil)
+  discard g_application_run(gapp)
+
 when isMainModule:
   let cfg = loadConfig()
   # Without this the X11 WM_CLASS is the binary name ("AppRun.wrapped" inside
@@ -1053,5 +1232,5 @@ when isMainModule:
   # StartupWMClass and show a generic icon.
   g_set_prgname(AppId)
   gtk_window_set_default_icon_name(AppId)
-  brew(AppId, gui(App(cfg = cfg, apps = findAppImages(cfg))),
-       icons = sourceIconDirs() & embeddedIconDir())
+  run(gui(App(cfg = cfg, apps = findAppImages(cfg), handler = appImageHandler())),
+      icons = sourceIconDirs() & embeddedIconDir())

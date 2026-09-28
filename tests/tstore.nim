@@ -257,6 +257,44 @@ Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
     check not fileExists(icon)
     check not unintegrate(app)
 
+  test "sets the default app for AppImages in mimeapps.list":
+    let before = "[Default Applications]\ntext/plain=gedit.desktop;\n" &
+      "application/vnd.appimage=it.mijorus.gearlever.desktop;\n\n" &
+      "[Added Associations]\napplication/vnd.appimage=it.mijorus.gearlever.desktop;\n"
+    let after = setDefaultApp(before, "am.desktop", AppImageMimeTypes)
+    check defaultFor(after, "application/vnd.appimage") == "am.desktop"
+    check defaultFor(after, "application/x-iso9660-appimage") == "am.desktop"
+    check defaultFor(after, "text/plain") == "gedit.desktop"
+    check "application/vnd.appimage=am.desktop;it.mijorus.gearlever.desktop;" in after
+    check "application/x-iso9660-appimage=am.desktop;" in after
+    check after.count("[Default Applications]") == 1
+    check after.count("application/vnd.appimage=") == 2
+    check setDefaultApp(after, "am.desktop", AppImageMimeTypes) == after
+    let fresh = setDefaultApp("", "am.desktop", AppImageMimeTypes)
+    check fresh.startsWith("[Default Applications]\n")
+    check defaultFor(fresh, "application/vnd.appimage") == "am.desktop"
+    check "[Added Associations]\napplication/vnd.appimage=am.desktop;" in fresh
+
+  test "registers itself as the AppImage handler":
+    putEnv("XDG_CURRENT_DESKTOP", "GNOME")
+    defer: delEnv("XDG_CURRENT_DESKTOP")
+    let gnomeList = home / ".config/gnome-mimeapps.list"
+    createDir(gnomeList.parentDir)
+    writeFile(gnomeList, "[Default Applications]\napplication/vnd.appimage=gearlever.desktop;\n")
+    check appImageHandler() == "gearlever.desktop"
+    makeAppImageHandler("dev.x.Am", "/opt/My Apps/am.AppImage")
+    check appImageHandler() == "dev.x.Am.desktop"
+    check defaultFor(readFile(home / ".config/mimeapps.list"),
+                     "application/vnd.appimage") == "dev.x.Am.desktop"
+    let entry = readFile(home / ".local/share/applications/dev.x.Am.desktop")
+    check "Exec=\"/opt/My Apps/am.AppImage\" %F" in entry
+    check "MimeType=application/vnd.appimage;application/x-iso9660-appimage;" in entry
+    # An entry some other tool installed is left alone.
+    writeFile(home / ".local/share/applications/dev.x.Am.desktop", "[Desktop Entry]\nName=Pkg\n")
+    makeAppImageHandler("dev.x.Am", "/elsewhere/am")
+    check readFile(home / ".local/share/applications/dev.x.Am.desktop") ==
+      "[Desktop Entry]\nName=Pkg\n"
+
   test "relocate moves an AppImage with its alias, source and menu entry":
     let src = home / "Downloads" / "Foo-1.0.AppImage"
     writeFakeRuntime(src)

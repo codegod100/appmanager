@@ -90,6 +90,22 @@ and icon with `--appimage-extract`. It writes them to
 `~/.local/share/appmanager/icons/`, with `Exec=` pointing at the AppImage.
 **Delete…** removes the AppImage, its alias and its menu entry.
 
+### Opening AppImages from the file manager
+
+To have double-clicking an AppImage open appmanager instead of another app
+(such as Gear Lever), open the ☰ menu and press **Open AppImages with
+AppManager**. This writes `~/.local/share/applications/dev.appmanager.AppManager.desktop`
+(pointing at the running binary, or at the AppImage appmanager runs from)
+and makes it the default for `application/vnd.appimage` and
+`application/x-iso9660-appimage` in `~/.config/mimeapps.list`, and in any
+desktop-specific list such as `~/.config/gnome-mimeapps.list` that already
+exists. You can also run `appmanager some.AppImage`.
+
+An opened AppImage appears at the top of the **Installed** tab with two
+choices: **Run** starts it, and **Install** moves it to `~/Applications`,
+adds it to your application menu and gives it an alias. If appmanager is
+already running, the file opens in that window.
+
 Downloads use `curl`, and hashes use `sha1sum` from your system. GitHub
 allows 60 unauthenticated API requests an hour. If you check many apps,
 export `GITHUB_TOKEN` to raise that limit. appmanager passes the token to
