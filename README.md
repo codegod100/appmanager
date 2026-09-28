@@ -2,7 +2,10 @@
 
 A small GTK4 GUI written in Nim ([owlkettle](https://github.com/can-lehmann/owlkettle))
 that finds the AppImages you have installed, lets you give each one a short
-command-line alias, and puts those aliases on your `PATH`.
+command-line alias, and puts those aliases on your `PATH`. It can also search
+AppImageHub and GitHub for new AppImages, install them, keep them updated and
+add them to your application menu, much like
+[Gear Lever](https://github.com/mijorus/gearlever).
 
 ![screenshot](docs/screenshot.png)
 
@@ -31,7 +34,53 @@ command-line alias, and puts those aliases on your `PATH`.
 - Warns if an alias would shadow an existing command. It refuses duplicate
   aliases and never overwrites or deletes files it didn't create.
 
-Aliases and scan folders are stored in `~/.config/appmanager/config.json`.
+### Finding and installing AppImages
+
+The **Browse** tab searches two sources:
+
+- **AppImageHub**: the [appimage.github.io](https://appimage.github.io) catalog
+  of about 1,300 apps published on GitHub. It is downloaded once a day to
+  `~/.cache/appmanager/appimagehub.json` and filtered as you type.
+- **GitHub**: repositories whose name, description, topics or README mention
+  AppImage, most-starred first. Press Enter to search.
+
+**Install** downloads the newest release asset that is an AppImage for your
+CPU (stable releases are preferred over pre-releases) into `~/Applications`
+and makes it executable. It also adds the app to your application menu and,
+if the suggested alias is free, gives it that alias.
+
+### Updates
+
+**Check for updates** checks every AppImage. The ⋯ menu on a row checks just
+that one. appmanager finds updates in one of these places:
+
+1. an update source you set in the ⋯ menu: a GitHub repository (`owner/repo`
+   or its URL) or a `.zsync` URL. Apps installed from **Browse** get their
+   repository set automatically.
+2. the update information embedded in the AppImage (its `.upd_info` section),
+   in the `gh-releases-zsync|…` or `zsync|…` format that AppImageUpdate uses.
+
+When the release has a `.zsync` file, appmanager compares that file's SHA-1
+with the installed AppImage. Otherwise it compares the release asset with the
+one it installed. **Update** downloads the new build next to the old one,
+checks its SHA-1 when it can, and then replaces the old file. The path
+doesn't change, so aliases and menu entries keep working.
+
+### App menu and removal
+
+In the ⋯ menu, **Add to app menu** extracts the AppImage's `.desktop` file
+and icon with `--appimage-extract`. It writes them to
+`~/.local/share/applications/appmanager-*.desktop` and
+`~/.local/share/appmanager/icons/`, with `Exec=` pointing at the AppImage.
+**Delete…** removes the AppImage, its alias and its menu entry.
+
+Downloads use `curl`, and hashes use `sha1sum` from your system. GitHub
+allows 60 unauthenticated API requests an hour. If you check many apps,
+export `GITHUB_TOKEN` to raise that limit. appmanager passes the token to
+curl in a private config file, not on the command line.
+
+Aliases, scan folders and update sources are stored in
+`~/.config/appmanager/config.json`.
 
 ## Building
 
@@ -40,7 +89,7 @@ Debian/Ubuntu, `gtk4-devel` on Fedora, `gtk4` on Arch).
 
 ```sh
 nimble build      # produces ./appmanager
-nimble test       # runs the core tests (no GTK needed)
+nimble test       # runs the core and store tests (no GTK or network needed)
 ./appmanager
 ```
 
