@@ -1,5 +1,5 @@
-## Finding, installing and updating AppImages: the AppImageHub catalog,
-## GitHub releases, embedded update information, zsync metadata and
+## Finding, installing and updating AppImages: the AppImageHub and
+## pkgforge-dev catalogs, GitHub releases, embedded update information, zsync metadata and
 ## desktop menu integration.
 ##
 ## Nothing here touches the network: callers download with `curlArgs` and
@@ -11,6 +11,7 @@ import core
 
 const
   AppImageHubFeed* = "https://appimage.github.io/feed.json"
+  PkgforgeList* = "https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/main/README.md"
   GitHubApi* = "https://api.github.com"
   CatalogMaxAge* = initDuration(days = 1)
   DesktopMarkerKey* = "X-AppManager-AppImage"
@@ -19,6 +20,7 @@ const
 type
   CatalogSource* = enum
     FromAppImageHub = "AppImageHub"
+    FromPkgforge = "pkgforge-dev"
     FromGitHub = "GitHub"
 
   CatalogApp* = object
@@ -113,8 +115,22 @@ proc releasesUrl*(repo: string, tag = ""): string =
   of "latest": GitHubApi & "/repos/" & repo & "/releases/latest"
   else: GitHubApi & "/repos/" & repo & "/releases/tags/" & encodeQuery(tag)
 
-proc catalogCachePath*(): string =
-  getCacheDir("appmanager") / "appimagehub.json"
+proc isCatalog*(source: CatalogSource): bool =
+  ## Whether `source` is a list we download whole and filter locally (as
+  ## opposed to one we query per search).
+  source != FromGitHub
+
+proc catalogUrl*(source: CatalogSource): string =
+  case source
+  of FromAppImageHub: AppImageHubFeed
+  of FromPkgforge: PkgforgeList
+  of FromGitHub: ""
+
+proc catalogCachePath*(source = FromAppImageHub): string =
+  getCacheDir("appmanager") / (case source
+    of FromAppImageHub: "appimagehub.json"
+    of FromPkgforge: "pkgforge-dev.md"
+    of FromGitHub: "github.json")
 
 proc catalogIsFresh*(path = catalogCachePath()): bool =
   fileExists(path) and getTime() - getLastModificationTime(path) < CatalogMaxAge
@@ -186,6 +202,37 @@ proc parseAppImageHub*(node: JsonNode): seq[CatalogApp] =
       if cat.getStr.len > 0: app.categories.add(cat.getStr)
     if app.name.len == 0: app.name = repo.split('/')[1]
     result.add(app)
+
+proc parsePkgforge*(markdown: string): seq[CatalogApp] =
+  ## Parses the app tables of pkgforge-dev's Anylinux-AppImages README:
+  ## one-cell rows of the form `| [Name](https://github.com/owner/repo) |`.
+  ## These AppImages bundle all their libraries (sharun + uruntime), so
+  ## they run on old, musl and non-FHS distros alike.
+  var seen: seq[string]
+  for line in markdown.splitLines:
+    let row = line.strip
+    if not row.startsWith("| [") or not row.endsWith("|"): continue
+    let nameEnd = row.find("](")
+    if nameEnd < 0: continue
+    let urlEnd = row.find(')', nameEnd)
+    if urlEnd < 0 or row[urlEnd + 1 .. ^1].strip != "|": continue
+    let repo = normalizeRepo(row[nameEnd + 2 ..< urlEnd])
+    if repo.len == 0 or repo.toLowerAscii in seen: continue
+    seen.add(repo.toLowerAscii)
+    let name = row[3 ..< nameEnd].strip
+    result.add(CatalogApp(
+      name: if name.len > 0: name else: repo.split('/')[1],
+      summary: if repo.toLowerAscii.startsWith("pkgforge-dev/"):
+                 "Anylinux AppImage built by pkgforge-dev"
+               else: "Publishes an Anylinux AppImage",
+      repo: repo, categories: @["Anylinux"], stars: -1, source: FromPkgforge))
+
+proc parseCatalog*(source: CatalogSource, data: string): seq[CatalogApp] =
+  ## Parses a downloaded catalog. Raises on malformed JSON.
+  case source
+  of FromAppImageHub: parseAppImageHub(parseJson(data))
+  of FromPkgforge: parsePkgforge(data)
+  of FromGitHub: @[]
 
 proc parseGitHubSearch*(node: JsonNode): seq[CatalogApp] =
   for item in elems(node{"items"}):
