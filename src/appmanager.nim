@@ -26,7 +26,9 @@ type
     message: string       ## Error text or a note
     asset: ReleaseAsset   ## The newer build, when one is available
     sha1: string          ## Expected SHA-1 of that build, when known
-    progress: float
+    progress: float       ## Fraction downloaded, when the size is known
+    downloaded: BiggestInt ## Bytes downloaded so far
+    verifying: bool       ## Download done, checking it before swapping it in
 
 viewable App:
   cfg: Config
@@ -266,6 +268,16 @@ proc isVersionTag(tag: string): bool =
   ## version, so we show the file name instead.
   tag.contains(Digits)
 
+proc formatBytes(n: BiggestInt): string =
+  if n >= 1024 * 1024: formatFloat(n.float / (1024 * 1024), ffDecimal, 1) & " MB"
+  elif n >= 1024: $(n div 1024) & " KB"
+  else: $n & " B"
+
+proc newerName(asset: ReleaseAsset, installedTag: string): string =
+  ## How to call the build `asset` in messages: its version, else its file.
+  if asset.tag.isVersionTag and asset.tag != installedTag: asset.tag
+  else: asset.name
+
 proc applyUpdate(app: AppState, path: string) =
   ## Downloads the newer build next to the old one and swaps it in, so the
   ## path (and with it aliases and menu entries) stays the same.
@@ -274,7 +286,15 @@ proc applyUpdate(app: AppState, path: string) =
   let asset = st.asset
   let name = path.extractFilename
   let part = path.parentDir / "." & name & ".part"
+  let target = asset.newerName(app.cfg.installFor(path).tag)
   app.updates[path] = UpdateStatus(state: Updating, asset: asset, sha1: st.sha1)
+  app.report(@[], "Updating " & name & (if target.len > 0: " to " & target else: "") & "…")
+
+  proc setVerifying() =
+    if path in app.updates:
+      app.updates[path].verifying = true
+      app.updates[path].progress = 1.0
+      app.refresh()
 
   proc fail(msg: string) =
     removeFile(part)
@@ -294,28 +314,58 @@ proc applyUpdate(app: AppState, path: string) =
     if isIntegrated(path):
       try: discard integrate(path)  # the icon may have changed
       except OSError, IOError: discard
-    app.updates[path] = UpdateStatus(state: UpToDate, message: "Updated")
-    app.report(@[], "Updated " & name &
-               (if asset.tag.isVersionTag: " to " & asset.tag
-                elif asset.name.len > 0 and asset.name != name: " to " & asset.name
-                else: ""))
+    let to =
+      if asset.tag.isVersionTag: " to " & asset.tag
+      elif asset.name.len > 0 and asset.name != name: " to " & asset.name
+      else: ""
+    app.updates[path] = UpdateStatus(state: UpToDate, message: "Updated" & to)
+    app.report(@[], "Updated " & name & to)
+    app.refresh()
+
+  proc alreadyCurrent() =
+    ## The "new" build turned out to be the one we have: nothing to swap.
+    removeFile(part)
+    app.recordInstall(path, asset)
+    app.updates[path] = UpdateStatus(state: UpToDate,
+                                     message: "Already the latest build")
+    app.report(@[], name & " was already the latest build; nothing changed")
     app.refresh()
 
   download(asset.url, part,
     proc(error: string) =
       if error.len > 0:
         fail(error)
-      elif st.sha1.len > 0:
-        sha1Async(part, proc(sha1, error: string) =
-          if sha1 != st.sha1: fail("the download is corrupt (SHA-1 mismatch)")
-          else: swapIn())
-      else:
-        swapIn(),
+        return
+      setVerifying()
+      sha1Async(part, proc(sha1, error: string) =
+        if error.len > 0:
+          fail(error)
+        elif st.sha1.len > 0 and sha1 != st.sha1:
+          fail("the download is corrupt (SHA-1 mismatch)")
+        elif st.sha1.len > 0:
+          swapIn()  # the check already found the old build to differ
+        else:
+          # Without a .zsync we only guessed that this build is newer.
+          sha1Async(path, proc(old, error: string) =
+            if error.len == 0 and old == sha1: alreadyCurrent()
+            else: swapIn())),
     expected = asset.size,
     onProgress = proc(fraction: float) =
       if path in app.updates:
         app.updates[path].progress = fraction
+        app.refresh(),
+    onBytes = proc(bytes: BiggestInt) =
+      if path in app.updates:
+        app.updates[path].downloaded = bytes
         app.refresh())
+
+proc updateAll(app: AppState) =
+  var n = 0
+  for a in app.apps:
+    if app.statusOf(a.path).state == UpdateAvailable:
+      app.applyUpdate(a.path)
+      inc n
+  if n > 1: app.report(@[], "Updating " & $n & " AppImages…")
 
 proc setUpdateSource(app: AppState, path, text: string) =
   let text = text.strip
@@ -343,12 +393,20 @@ proc updateLine(app: AppState, path: string): string =
   of Checking: parts.add("Checking for updates…")
   of UpToDate: parts.add(if st.message.len > 0: st.message else: "Up to date")
   of UpdateAvailable:
-    let newer = if st.asset.tag.isVersionTag and st.asset.tag != info.tag: st.asset.tag
-                else: st.asset.name
+    let newer = st.asset.newerName(info.tag)
     parts.add("Update available" & (if newer.len > 0: ": " & newer else: ""))
   of NoSource: parts.add("No update source (set one in the ⋯ menu)")
   of CheckFailed: parts.add("Update check failed: " & st.message)
-  of Updating: parts.add("Downloading update… " & $int(st.progress * 100) & "%")
+  of Updating:
+    if st.verifying:
+      parts.add("Verifying and installing the update…")
+    elif st.asset.size > 0:
+      parts.add("Downloading update… " & $int(st.progress * 100) & "% (" &
+                formatBytes(st.downloaded) & " of " & formatBytes(st.asset.size) & ")")
+    elif st.downloaded > 0:
+      parts.add("Downloading update… " & formatBytes(st.downloaded))
+    else:
+      parts.add("Starting download…")
   parts.join(" · ")
 
 # ---------------------------------------------------------------------------
@@ -802,6 +860,14 @@ method view(app: AppState): Widget =
                       app.rescan()
 
         if app.page == PageInstalled:
+          let available = app.apps.countIt(app.statusOf(it.path).state == UpdateAvailable)
+          if available > 1:
+            Button {.addRight.}:
+              text = "Update all (" & $available & ")"
+              tooltip = "Download every available update"
+              style = [ButtonSuggested]
+              proc clicked() =
+                app.updateAll()
           Button {.addRight.}:
             text = "Check for updates"
             tooltip = "Check all AppImages for updates"
@@ -936,7 +1002,8 @@ method view(app: AppState): Widget =
                             ellipsize = EllipsizeEnd
                             tooltip = updateText
                             style = (if update.state == CheckFailed: [StyleClass("error"), StyleClass("caption")]
-                                     elif update.state == UpdateAvailable: [StyleClass("accent"), StyleClass("caption")]
+                                     elif update.state in {UpdateAvailable, Updating}: [StyleClass("accent"), StyleClass("caption")]
+                                     elif update.state == UpToDate and update.message.len > 0: [StyleClass("success"), StyleClass("caption")]
                                      else: [StyleClass("dim-label"), StyleClass("caption")])
                       Button {.expand: false, vAlign: AlignCenter.}:
                         icon = "edit-copy-symbolic"
@@ -976,10 +1043,18 @@ method view(app: AppState): Widget =
                           spinning = true
                           tooltip = "Checking for updates…"
                       of Updating:
-                        ProgressBar {.expand: false, vAlign: AlignCenter.}:
-                          fraction = update.progress
-                          sizeRequest = (60, -1)
-                          tooltip = "Downloading update…"
+                        if update.verifying or update.asset.size <= 0:
+                          # No meaningful fraction to show: keep something moving.
+                          Spinner {.expand: false, vAlign: AlignCenter.}:
+                            spinning = true
+                            tooltip = updateText
+                        else:
+                          ProgressBar {.expand: false, vAlign: AlignCenter.}:
+                            fraction = update.progress
+                            showText = true
+                            text = $int(update.progress * 100) & "%"
+                            sizeRequest = (90, -1)
+                            tooltip = updateText
                       of UpdateAvailable:
                         Button {.expand: false, vAlign: AlignCenter.}:
                           text = "Update"
