@@ -85,6 +85,36 @@ suite "store":
     check searchCatalog(apps, "audiovideo")[0].name == "Kdenlive"
     check searchCatalog(apps, "zzz").len == 0
 
+  test "parses the pkgforge-dev app list":
+    let md = """
+Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
+<!-- APPS_LIST_START -->
+| Applications |
+| --- |
+| [86Box](https://github.com/pkgforge-dev/86box-AppImage-Enhanced) |
+| [Android Tools](https://github.com/pkgforge-dev/android-tools-AppImage) |
+| [Dupe](https://github.com/pkgforge-dev/86box-AppImage-Enhanced) |
+| [Elsewhere](https://gitlab.com/x/y) |
+| [Two](https://github.com/a/b) | extra cell |
+<!-- APPS_LIST_END -->
+
+| Projects with Anylinux AppImages |
+| --- |
+| [AM-GUI](https://github.com/Shikakiben/AM-GUI) |
+"""
+    let apps = parsePkgforge(md)
+    check apps.len == 3
+    check apps[0].name == "86Box"
+    check apps[0].repo == "pkgforge-dev/86box-AppImage-Enhanced"
+    check apps[0].source == FromPkgforge
+    check apps[1].name == "Android Tools"
+    check apps[2].repo == "Shikakiben/AM-GUI"
+    check "pkgforge-dev" in apps[0].summary
+    check searchCatalog(apps, "android")[0].name == "Android Tools"
+    check parseCatalog(FromPkgforge, md).len == 3
+    check catalogCachePath(FromPkgforge) != catalogCachePath(FromAppImageHub)
+    check FromPkgforge.isCatalog and not FromGitHub.isCatalog
+
   test "cleans up catalog text":
     check plainText("<p>Audio &amp; video</p>\n<ul>\n  <li>Cut</li></ul>") ==
       "Audio & video Cut"
