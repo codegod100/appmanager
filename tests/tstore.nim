@@ -46,6 +46,20 @@ proc release(tag: string, assets: openArray[string], pre = false,
                   tag & "/" & name})
   %*{"tag_name": tag, "prerelease": pre, "draft": draft, "assets": list}
 
+proc writeFakeRuntime(path: string) =
+  ## A stand-in AppImage whose runtime supports --appimage-extract.
+  createDir(path.parentDir)
+  writeFile(path, """#!/bin/sh
+[ "$1" = --appimage-extract ] || exit 1
+mkdir -p squashfs-root
+case "$2" in
+  '*.desktop') printf '[Desktop Entry]\nType=Application\nName=Foo\nExec=AppRun %%F\nIcon=foo\n' > squashfs-root/foo.desktop ;;
+  .DirIcon) ln -sf foo.png squashfs-root/.DirIcon ;;
+  foo.png) printf '\211PNGdata' > squashfs-root/foo.png ;;
+esac
+""")
+  setFilePermissions(path, {fpUserRead, fpUserWrite, fpUserExec})
+
 suite "store":
   var home: string
   setup:
@@ -227,16 +241,7 @@ Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
   test "integrates an AppImage into the menu and removes it again":
     # A stand-in AppImage whose runtime supports --appimage-extract.
     let app = home / "Applications" / "Foo-1.0.AppImage"
-    createDir(app.parentDir)
-    writeFile(app, """#!/bin/sh
-[ "$1" = --appimage-extract ] || exit 1
-mkdir -p squashfs-root
-case "$2" in
-  '*.desktop') printf '[Desktop Entry]\nType=Application\nName=Foo\nExec=AppRun %%F\nIcon=foo\n' > squashfs-root/foo.desktop ;;
-  .DirIcon) ln -sf foo.png squashfs-root/.DirIcon ;;
-  foo.png) printf '\211PNGdata' > squashfs-root/foo.png ;;
-esac
-""")
+    writeFakeRuntime(app)
     let entry = integrate(app)
     check entry == desktopEntryFor(app)
     check isIntegrated(app)
@@ -252,6 +257,35 @@ esac
     check not fileExists(icon)
     check not unintegrate(app)
 
+  test "relocate moves an AppImage with its alias, source and menu entry":
+    let src = home / "Downloads" / "Foo-1.0.AppImage"
+    writeFakeRuntime(src)
+    var cfg = defaultConfig()
+    cfg.setAlias(src, "foo")
+    cfg.installs[src] = InstallInfo(source: "o/r", tag: "v1")
+    discard integrate(src)
+    check needsMove(src)
+    check not needsMove(home / "Applications" / "x.AppImage")  # missing
+    var notes: seq[string]
+    let dest = cfg.relocate(src, defaultInstallDir(), notes)
+    check notes.len == 0
+    check dest == home / "Applications" / "Foo-1.0.AppImage"
+    check fileExists(dest) and not fileExists(src)
+    check fpUserExec in getFilePermissions(dest)
+    check not needsMove(dest)
+    check cfg.aliases["foo"] == dest
+    check cfg.installFor(dest).source == "o/r" and src notin cfg.installs
+    check not isIntegrated(src) and isIntegrated(dest)
+    check ("Exec=" & dest & " %F") in readFile(desktopEntryFor(dest))
+    # A symlink into the central folder isn't offered for moving.
+    createSymlink(dest, home / "bin-foo.AppImage")
+    check not needsMove(home / "bin-foo.AppImage")
+    # Never overwrites a file that's already there.
+    writeFakeRuntime(src)
+    expect OSError:
+      discard cfg.relocate(src, defaultInstallDir(), notes)
+    check fileExists(src)
+
   test "forget removes aliases and install records":
     var cfg = defaultConfig()
     cfg.setAlias("/a.AppImage", "a")
@@ -263,8 +297,11 @@ esac
     var cfg = defaultConfig()
     cfg.installs["/x/A.AppImage"] = InstallInfo(source: "o/r", tag: "v1",
                                                asset: "A.AppImage", assetId: 1234567890123)
+    check cfg.offerMove
+    cfg.offerMove = false
     saveConfig(cfg)
     let loaded = loadConfig()
+    check not loaded.offerMove
     check loaded.installFor("/x/A.AppImage").assetId == 1234567890123
     check loaded.installFor("/x/A.AppImage").source == "o/r"
     check loaded.installFor("/nope").tag == ""

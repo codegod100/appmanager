@@ -51,6 +51,7 @@ viewable App:
   sourceDrafts: Table[string, string]  ## AppImage path -> update source being edited
   checkQueue: seq[string]
   checksRunning: int
+  moveOfferHidden: bool           ## "Not now" on the move banner
 
 proc rescan(app: AppState) =
   app.apps = findAppImages(app.cfg)
@@ -102,11 +103,6 @@ proc effectiveAlias(app: AppState, path: string): string =
   if result.len == 0 and app.cfg.aliasFor(path).len == 0 and
       path notin app.drafts:
     result = suggestAlias(path.extractFilename)
-
-proc tildify(path: string): string =
-  let home = getHomeDir().strip(leading = false, chars = {'/'})
-  if path == home or path.startsWith(home & "/"): "~" & path[home.len .. ^1]
-  else: path
 
 proc copyToClipboard(text: string) =
   gdk_clipboard_set_text(gdk_display_get_clipboard(gdk_display_get_default()),
@@ -398,6 +394,55 @@ proc uninstall(app: AppState, path: string) =
     app.report(@[], "Deleted " & name)
 
 # ---------------------------------------------------------------------------
+# Moving AppImages to ~/Applications
+
+proc moveCandidates(app: AppState): seq[string] =
+  ## AppImages outside ~/Applications that we could move there now.
+  for a in app.apps:
+    if needsMove(a.path) and app.statusOf(a.path).state notin {Checking, Updating}:
+      result.add(a.path)
+
+proc renamePath(app: AppState, src, dest: string) =
+  ## Carries the per-AppImage UI state over to its new path.
+  if src in app.updates:
+    app.updates[dest] = app.updates[src]
+    app.updates.del(src)
+  app.embedded.del(src)
+  app.drafts.del(src)
+  app.sourceDrafts.del(src)
+
+proc moveToCentral(app: AppState, paths: seq[string]) =
+  ## Moves AppImages into ~/Applications, keeping their aliases, update
+  ## sources and menu entries.
+  let dir = defaultInstallDir()
+  var notes, failed: seq[string]
+  var moved = 0
+  var aliasesMoved = false
+  for src in paths:
+    let hadAlias = app.cfg.aliasFor(src).len > 0
+    try:
+      let dest = app.cfg.relocate(src, dir, notes)
+      app.renamePath(src, dest)
+      inc moved
+      aliasesMoved = aliasesMoved or hadAlias
+    except OSError, IOError:
+      failed.add("Could not move " & src.extractFilename & ": " & getCurrentExceptionMsg())
+  if moved > 0: refreshMenus()
+  app.rescan()
+  let summary =
+    if moved == 1 and paths.len == 1: "Moved " & paths[0].extractFilename & " to " & tildify(dir)
+    elif moved == paths.len: "Moved " & $moved & " AppImages to " & tildify(dir)
+    else: "Moved " & $moved & " of " & $paths.len & " AppImages to " & tildify(dir)
+  try:
+    # Launchers of moved aliases must point at the new paths.
+    if aliasesMoved: notes = apply(app.cfg) & notes
+    else: saveConfig(app.cfg)
+  except OSError, IOError:
+    failed.add("Could not save the new paths: " & getCurrentExceptionMsg())
+  if failed.len > 0: app.fail((@[summary] & failed & notes).join("\n"))
+  else: app.report(notes, summary)
+
+# ---------------------------------------------------------------------------
 # Browsing and installing
 
 proc refreshCatalog(app: AppState) =
@@ -678,6 +723,39 @@ method view(app: AppState): Widget =
                 copyToClipboard(app.cfg.binDir)
                 app.report(@[], "Copied " & app.cfg.binDir)
 
+          let strays = if app.cfg.offerMove and not app.moveOfferHidden: app.moveCandidates()
+                       else: @[]
+          if strays.len > 0:
+            Frame {.expand: false.}:
+              Box(orient = OrientX, spacing = 8, margin = 8):
+                Label:
+                  text = (if strays.len == 1: strays[0].extractFilename & " is"
+                          else: $strays.len & " AppImages are") &
+                         " outside " & tildify(defaultInstallDir()) & ". Move " &
+                         (if strays.len == 1: "it" else: "them") &
+                         " there to keep your AppImages in one place? " &
+                         "Aliases, update sources and menu entries move along."
+                  tooltip = strays.mapIt(tildify(it)).join("\n")
+                  xAlign = 0
+                  wrap = true
+                Button {.expand: false, vAlign: AlignCenter.}:
+                  text = if strays.len == 1: "Move" else: "Move all"
+                  style = [ButtonSuggested]
+                  proc clicked() =
+                    app.moveToCentral(strays)
+                Button {.expand: false, vAlign: AlignCenter.}:
+                  text = "Not now"
+                  style = [ButtonFlat]
+                  proc clicked() =
+                    app.moveOfferHidden = true
+                Button {.expand: false, vAlign: AlignCenter.}:
+                  text = "Don't ask again"
+                  style = [ButtonFlat]
+                  proc clicked() =
+                    app.cfg.offerMove = false
+                    app.save()
+                    app.report(@[], "You can still move an AppImage from its ⋯ menu")
+
           if app.apps.len == 0:
             Label:
               text = "No AppImages found.\nPut them in ~/Applications, add a folder to scan, or install one from Browse."
@@ -807,6 +885,13 @@ method view(app: AppState): Widget =
                                 proc clicked() =
                                   app.setUpdateSource(path, sourceDraft)
                             Separator {.expand: false.}
+                            if needsMove(path):
+                              Button {.expand: false.}:
+                                text = "Move to " & tildify(defaultInstallDir())
+                                tooltip = "Keeps its alias, update source and menu entry"
+                                sensitive = update.state notin {Checking, Updating}
+                                proc clicked() =
+                                  app.moveToCentral(@[path])
                             Button {.expand: false.}:
                               text = if integrated: "Remove from app menu" else: "Add to app menu"
                               sensitive = not missing
