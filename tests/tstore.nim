@@ -55,7 +55,7 @@ mkdir -p squashfs-root
 case "$2" in
   '*.desktop') printf '[Desktop Entry]\nType=Application\nName=Foo\nExec=AppRun %%F\nIcon=foo\n' > squashfs-root/foo.desktop ;;
   .DirIcon) ln -sf foo.png squashfs-root/.DirIcon ;;
-  foo.png) printf '\211PNGdata' > squashfs-root/foo.png ;;
+  foo.png) printf '\211PNG\r\n\032\n\0\0\0\rIHDR\0\0\0\100\0\0\0\100' > squashfs-root/foo.png ;;
 esac
 """)
   setFilePermissions(path, {fpUserRead, fpUserWrite, fpUserExec})
@@ -238,6 +238,19 @@ Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
     check "Name=Bar-1.0" in generated
     check "Exec=/apps/Bar-1.0.AppImage" in generated
 
+  test "picks a hicolor folder for icons":
+    proc png(w, h: int): string =
+      result = "\x89PNG\r\n\x1a\n\0\0\0\rIHDR"
+      for v in [w, h]:
+        for shift in [24, 16, 8, 0]: result.add(chr((v shr shift) and 0xff))
+    check iconSize(png(48, 48)) == 48
+    check iconSubdir(png(48, 48)) == "48x48"
+    check iconSubdir(png(200, 180)) == "192x192"
+    check iconSubdir(png(1024, 1024)) == "512x512"
+    check iconSubdir("\x89PNGdata") == "256x256"
+    check iconSubdir("<?xml?><svg xmlns='x'/>") == "scalable"
+    check iconSubdir("/* XPM */\nstatic char *x[] = {\n\"32 32 2 1\",") == "32x32"
+
   test "integrates an AppImage into the menu and removes it again":
     # A stand-in AppImage whose runtime supports --appimage-extract.
     let app = home / "Applications" / "Foo-1.0.AppImage"
@@ -249,9 +262,9 @@ Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
     let content = readFile(entry)
     check "Name=Foo" in content
     check "Exec=" & app & " %F" in content
-    let icon = iconsDir() / desktopId(app) & ".png"
-    check "Icon=" & icon in content
-    check readFile(icon) == "\x89PNGdata"
+    let icon = home / ".local/share/icons/hicolor/64x64/apps" / desktopId(app) & ".png"
+    check "Icon=" & desktopId(app) & "\n" in content
+    check readFile(icon).startsWith("\x89PNG")
     check unintegrate(app)
     check not isIntegrated(app)
     check not fileExists(icon)

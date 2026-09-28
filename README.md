@@ -85,9 +85,12 @@ Symlinks are left alone. **Don't ask again** hides the banner for good.
 ### App menu and removal
 
 In the ⋯ menu, **Add to app menu** extracts the AppImage's `.desktop` file
-and icon with `--appimage-extract`. It writes them to
-`~/.local/share/applications/appmanager-*.desktop` and
-`~/.local/share/appmanager/icons/`, with `Exec=` pointing at the AppImage.
+and icon with `--appimage-extract`. It writes the entry to
+`~/.local/share/applications/appmanager-*.desktop`, with `Exec=` pointing at
+the AppImage. The icon goes into the hicolor icon theme,
+`~/.local/share/icons/hicolor/<size>/apps/` (`scalable` for SVGs), under the
+same name as the entry, so `Icon=` can use that name. If you already have an
+icon cache there, it is rebuilt.
 **Delete…** removes the AppImage, its alias and its menu entry.
 
 ### Opening AppImages from the file manager

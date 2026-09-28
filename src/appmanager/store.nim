@@ -536,7 +536,13 @@ proc applicationsDir*(): string =
   let dir = getEnv("XDG_DATA_HOME")
   (if dir.len > 0: dir else: getHomeDir() / ".local/share") / "applications"
 
-proc iconsDir*(): string =
+proc iconThemeDir*(): string =
+  ## The user's hicolor icon theme, where menu icons are installed.
+  let dir = getEnv("XDG_DATA_HOME")
+  (if dir.len > 0: dir else: getHomeDir() / ".local/share") / "icons" / "hicolor"
+
+proc legacyIconsDir(): string =
+  ## Where older versions put menu icons; cleaned up on (un)integrate.
   let dir = getEnv("XDG_DATA_HOME")
   (if dir.len > 0: dir else: getHomeDir() / ".local/share") / "appmanager" / "icons"
 
@@ -631,6 +637,56 @@ proc iconExt(data: string): string =
   elif "<svg" in data[0 ..< min(data.len, 4096)]: ".svg"
   else: ""
 
+const HicolorSizes = [16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512]
+
+proc iconSize*(data: string): int =
+  ## The larger dimension of a PNG or XPM image, or 0 if unknown.
+  if data.startsWith("\x89PNG") and data.len >= 24 and data[12 ..< 16] == "IHDR":
+    var w, h = 0
+    for i in 0 ..< 4:
+      w = w shl 8 or ord(data[16 + i])
+      h = h shl 8 or ord(data[20 + i])
+    return max(w, h)
+  if data.startsWith("/* XPM"):
+    # The first string holds "<width> <height> <colors> <chars per pixel>".
+    let start = data.find('"')
+    if start < 0: return 0
+    let stop = data.find('"', start + 1)
+    if stop < 0: return 0
+    let fields = data[start + 1 ..< stop].splitWhitespace
+    if fields.len >= 2:
+      try: return max(parseInt(fields[0]), parseInt(fields[1]))
+      except ValueError: discard
+  0
+
+proc iconSubdir*(data: string): string =
+  ## The hicolor directory an icon belongs in: `scalable` for SVGs, else the
+  ## standard size closest to the image's (256x256 if it can't be read).
+  if iconExt(data) == ".svg": return "scalable"
+  var size = iconSize(data)
+  if size <= 0: size = 256
+  var best = HicolorSizes[0]
+  for s in HicolorSizes:
+    if abs(s - size) < abs(best - size): best = s
+  $best & "x" & $best
+
+proc removeIcons(id: string) =
+  ## Deletes every icon named `id` from the hicolor theme and the old folder.
+  if dirExists(iconThemeDir()):
+    for kind, dir in walkDir(iconThemeDir()):
+      if kind in {pcDir, pcLinkToDir}:
+        for ext in [".png", ".svg", ".xpm"]:
+          removeFile(dir / "apps" / id & ext)
+  for ext in [".png", ".svg", ".xpm"]:
+    removeFile(legacyIconsDir() / id & ext)
+
+proc touchIconTheme() =
+  ## Bumps the theme folder's mtime so running apps rescan it and ignore a
+  ## stale icon cache.
+  if dirExists(iconThemeDir()):
+    try: setLastModificationTime(iconThemeDir(), getTime())
+    except OSError: discard
+
 proc runWithTimeout(exe: string, args: seq[string], dir: string,
                     timeoutMs = 15_000): bool =
   ## Runs `exe` with its output discarded, killing it after `timeoutMs`.
@@ -711,12 +767,13 @@ proc integrate*(appPath: string): string =
   let id = desktopId(appPath)
   var icon = ""
   let ext = iconExt(iconData)
+  removeIcons(id)
   if ext.len > 0:
-    createDir(iconsDir())
-    for old in [".png", ".svg", ".xpm"]:
-      removeFile(iconsDir() / id & old)
-    icon = iconsDir() / id & ext
-    writeFile(icon, iconData)
+    let dir = iconThemeDir() / iconSubdir(iconData) / "apps"
+    createDir(dir)
+    writeFile(dir / id & ext, iconData)
+    icon = id
+  touchIconTheme()
   createDir(applicationsDir())
   result = applicationsDir() / id & ".desktop"
   writeFile(result, rewriteDesktopEntry(desktop, appPath, icon))
@@ -728,14 +785,23 @@ proc unintegrate*(appPath: string): bool =
   let entry = applicationsDir() / id & ".desktop"
   result = fileExists(entry)
   removeFile(entry)
-  for ext in [".png", ".svg", ".xpm"]:
-    removeFile(iconsDir() / id & ext)
+  removeIcons(id)
+  touchIconTheme()
 
 proc refreshMenus*() =
-  ## Asks the desktop to notice changed menu entries, if the tool exists.
+  ## Asks the desktop to notice changed menu entries and icons, if the
+  ## tools exist. The icon cache is only rebuilt if the user already has
+  ## one, since a stale cache would hide new icons.
   let tool = findExe("update-desktop-database")
   if tool.len > 0:
     discard runWithTimeout(tool, @["-q", applicationsDir()], getTempDir(), 5_000)
+  if fileExists(iconThemeDir() / "icon-theme.cache"):
+    for name in ["gtk-update-icon-cache", "gtk4-update-icon-cache"]:
+      let cacheTool = findExe(name)
+      if cacheTool.len > 0:
+        discard runWithTimeout(cacheTool, @["-q", "-t", "-f", iconThemeDir()],
+                               getTempDir(), 15_000)
+        break
 
 # ---------------------------------------------------------------------------
 # Opening AppImages from the file manager
