@@ -36,13 +36,20 @@ add them to your application menu, much like
 
 ### Finding and installing AppImages
 
-The **Browse** tab searches two sources:
+The **Browse** tab searches three sources:
 
 - **AppImageHub**: the [appimage.github.io](https://appimage.github.io) catalog
-  of about 1,300 apps published on GitHub. It is downloaded once a day to
-  `~/.cache/appmanager/appimagehub.json` and filtered as you type.
+  of about 1,300 apps published on GitHub.
+- **pkgforge-dev**: the roughly 450
+  [Anylinux AppImages](https://github.com/pkgforge-dev/Anylinux-AppImages)
+  that pkgforge-dev builds, plus the projects it lists as shipping their own.
+  They bundle every library they need, so they also run on old, musl-based
+  and non-FHS distributions, and they don't need FUSE.
 - **GitHub**: repositories whose name, description, topics or README mention
   AppImage, most-starred first. Press Enter to search.
+
+AppImageHub and pkgforge-dev are downloaded at most once a day to
+`~/.cache/appmanager/` and filtered as you type.
 
 **Install** downloads the newest release asset that is an AppImage for your
 CPU (stable releases are preferred over pre-releases) into `~/Applications`
@@ -65,6 +72,15 @@ with the installed AppImage. Otherwise it compares the release asset with the
 one it installed. **Update** downloads the new build next to the old one,
 checks its SHA-1 when it can, and then replaces the old file. The path
 doesn't change, so aliases and menu entries keep working.
+
+### Keeping AppImages in one place
+
+If any AppImages live outside `~/Applications` (in `~/Downloads`, say), a
+banner offers to move them there. Each AppImage's ⋯ menu also has a
+**Move to ~/Applications** item. The alias, update source and menu entry
+follow the file to its new path. Nothing is overwritten: if a file with
+the same name is already there, that AppImage stays where it is.
+Symlinks are left alone. **Don't ask again** hides the banner for good.
 
 ### App menu and removal
 

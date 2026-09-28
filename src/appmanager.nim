@@ -37,21 +37,22 @@ viewable App:
   statusIsError: bool
 
   page: Page
-  catalog: seq[CatalogApp]        ## AppImageHub catalog
-  catalogLoading: bool
-  hubResults: seq[CatalogApp]
+  catalogs: array[CatalogSource, seq[CatalogApp]] ## Downloaded catalogs
+  catalogLoading: set[CatalogSource]
+  catalogResults: seq[CatalogApp] ## Matches in the selected catalog
   githubResults: seq[CatalogApp]
   githubSearches: int             ## Discards replies to outdated searches
   searchLoading: bool
   searchError: string
   query: string
-  source: int                     ## 0 = AppImageHub, 1 = GitHub
+  source: CatalogSource           ## Where Browse searches
   installing: Table[string, float] ## repo -> download progress (< 0: looking up)
 
   updates: Table[string, UpdateStatus] ## AppImage path -> update status
   sourceDrafts: Table[string, string]  ## AppImage path -> update source being edited
   checkQueue: seq[string]
   checksRunning: int
+  moveOfferHidden: bool           ## "Not now" on the move banner
 
   opened: seq[string]  ## AppImages opened from the file manager, awaiting a choice
   handler: string      ## Desktop file that opens AppImages ("" = unknown)
@@ -106,11 +107,6 @@ proc effectiveAlias(app: AppState, path: string): string =
   if result.len == 0 and app.cfg.aliasFor(path).len == 0 and
       path notin app.drafts:
     result = suggestAlias(path.extractFilename)
-
-proc tildify(path: string): string =
-  let home = getHomeDir().strip(leading = false, chars = {'/'})
-  if path == home or path.startsWith(home & "/"): "~" & path[home.len .. ^1]
-  else: path
 
 proc copyToClipboard(text: string) =
   gdk_clipboard_set_text(gdk_display_get_clipboard(gdk_display_get_default()),
@@ -402,35 +398,89 @@ proc uninstall(app: AppState, path: string) =
     app.report(@[], "Deleted " & name)
 
 # ---------------------------------------------------------------------------
+# Moving AppImages to ~/Applications
+
+proc moveCandidates(app: AppState): seq[string] =
+  ## AppImages outside ~/Applications that we could move there now.
+  for a in app.apps:
+    if needsMove(a.path) and app.statusOf(a.path).state notin {Checking, Updating}:
+      result.add(a.path)
+
+proc renamePath(app: AppState, src, dest: string) =
+  ## Carries the per-AppImage UI state over to its new path.
+  if src in app.updates:
+    app.updates[dest] = app.updates[src]
+    app.updates.del(src)
+  app.embedded.del(src)
+  app.drafts.del(src)
+  app.sourceDrafts.del(src)
+
+proc moveToCentral(app: AppState, paths: seq[string]) =
+  ## Moves AppImages into ~/Applications, keeping their aliases, update
+  ## sources and menu entries.
+  let dir = defaultInstallDir()
+  var notes, failed: seq[string]
+  var moved = 0
+  var aliasesMoved = false
+  for src in paths:
+    let hadAlias = app.cfg.aliasFor(src).len > 0
+    try:
+      let dest = app.cfg.relocate(src, dir, notes)
+      app.renamePath(src, dest)
+      inc moved
+      aliasesMoved = aliasesMoved or hadAlias
+    except OSError, IOError:
+      failed.add("Could not move " & src.extractFilename & ": " & getCurrentExceptionMsg())
+  if moved > 0: refreshMenus()
+  app.rescan()
+  let summary =
+    if moved == 1 and paths.len == 1: "Moved " & paths[0].extractFilename & " to " & tildify(dir)
+    elif moved == paths.len: "Moved " & $moved & " AppImages to " & tildify(dir)
+    else: "Moved " & $moved & " of " & $paths.len & " AppImages to " & tildify(dir)
+  try:
+    # Launchers of moved aliases must point at the new paths.
+    if aliasesMoved: notes = apply(app.cfg) & notes
+    else: saveConfig(app.cfg)
+  except OSError, IOError:
+    failed.add("Could not save the new paths: " & getCurrentExceptionMsg())
+  if failed.len > 0: app.fail((@[summary] & failed & notes).join("\n"))
+  else: app.report(notes, summary)
+
+# ---------------------------------------------------------------------------
 # Browsing and installing
 
-proc refreshHub(app: AppState) =
-  app.hubResults = searchCatalog(app.catalog, app.query, int.high)
+proc refreshCatalog(app: AppState) =
+  if app.source.isCatalog:
+    app.catalogResults = searchCatalog(app.catalogs[app.source], app.query, int.high)
 
-proc loadCatalog(app: AppState, force = false) =
-  if app.catalogLoading: return
-  let cache = catalogCachePath()
+proc loadCatalog(app: AppState, source: CatalogSource, force = false) =
+  ## Loads a catalog from its daily cache, downloading it when the cache is
+  ## missing or stale (or when `force` is set).
+  if not source.isCatalog or source in app.catalogLoading: return
+  let cache = catalogCachePath(source)
   proc useCache(): bool =
     try:
-      app.catalog = parseAppImageHub(parseFile(cache))
-      app.refreshHub()
+      let apps = parseCatalog(source, readFile(cache))
+      if apps.len == 0: return false
+      app.catalogs[source] = apps
+      app.refreshCatalog()
       true
     except CatchableError:
       false
   if not force and catalogIsFresh(cache) and useCache(): return
-  app.catalogLoading = true
+  app.catalogLoading.incl(source)
   app.searchError = ""
   let part = cache & ".part"
   try: createDir(cache.parentDir)
   except OSError: discard
-  download(AppImageHubFeed, part, proc(error: string) =
-    app.catalogLoading = false
+  download(catalogUrl(source), part, proc(error: string) =
+    app.catalogLoading.excl(source)
     if error.len == 0:
       try: moveFile(part, cache)
       except OSError: discard
     # A stale copy beats nothing when we're offline.
-    if not useCache():
-      app.searchError = "Could not load the AppImageHub catalog" &
+    if not useCache() and source == app.source:
+      app.searchError = "Could not load the " & $source & " catalog" &
         (if error.len > 0: ": " & error else: "")
     app.refresh())
 
@@ -552,7 +602,16 @@ proc install(app: AppState, item: CatalogApp) =
           app.refresh()))
 
 proc results(app: AppState): seq[CatalogApp] =
-  if app.source == 0: app.hubResults else: app.githubResults
+  if app.source.isCatalog: app.catalogResults else: app.githubResults
+
+proc selectSource(app: AppState, source: CatalogSource) =
+  app.source = source
+  app.searchError = ""
+  if source.isCatalog:
+    app.refreshCatalog()
+    if app.catalogs[source].len == 0: app.loadCatalog(source)
+  elif app.query.strip.len > 0:
+    app.searchGitHub()
 
 proc describe(item: CatalogApp): string =
   var parts = @[item.repo]
@@ -563,8 +622,8 @@ proc describe(item: CatalogApp): string =
 
 proc switchTo(app: AppState, page: Page) =
   app.page = page
-  if page == PageBrowse and app.catalog.len == 0:
-    app.loadCatalog()
+  if page == PageBrowse and app.source.isCatalog and app.catalogs[app.source].len == 0:
+    app.loadCatalog(app.source)
 
 # ---------------------------------------------------------------------------
 # AppImages opened from the file manager
@@ -599,23 +658,20 @@ proc launch(app: AppState, path: string) =
 
 proc adopt(app: AppState, path: string) =
   ## Installs an AppImage opened from the file manager: moves it to
-  ## ~/Applications (unless it's there already or has settings tied to its
-  ## path), then adds it to the app menu and gives it an alias.
+  ## ~/Applications (keeping any alias, update source and menu entry), then
+  ## adds it to the app menu and gives it an alias.
   let name = path.extractFilename
-  let dir = defaultInstallDir()
   var dest = path
-  let known = app.cfg.aliasFor(path).len > 0 or path in app.cfg.installs
-  if path.parentDir.normalizedPath != dir.normalizedPath and not known:
-    dest = dir / name
-    if fileExists(dest) or dirExists(dest):
-      app.fail(tildify(dest) & " already exists")
-      return
+  if needsMove(path):
+    let hadAlias = app.cfg.aliasFor(path).len > 0
+    var notes: seq[string]
     try:
-      createDir(dir)
-      moveFile(path, dest)
-    except OSError:
-      app.fail("Could not move " & name & " to " & tildify(dir) & ": " &
-               getCurrentExceptionMsg())
+      dest = app.cfg.relocate(path, defaultInstallDir(), notes)
+      app.renamePath(path, dest)
+      # Its launcher must point at the new path.
+      if hadAlias: discard apply(app.cfg)
+    except OSError, IOError:
+      app.fail("Could not move " & name & ": " & getCurrentExceptionMsg())
       return
   try:
     makeExecutable(dest)
@@ -667,13 +723,16 @@ method view(app: AppState): Widget =
         Button {.addLeft.}:
           icon = "view-refresh-symbolic"
           tooltip = if app.page == PageInstalled: "Rescan for AppImages"
-                    else: "Reload the AppImageHub catalog"
+                    elif app.source.isCatalog: "Reload the " & $app.source & " catalog"
+                    else: "Search GitHub again"
           proc clicked() =
             if app.page == PageInstalled:
               app.rescan()
               app.report(@[], "Found " & $app.apps.len & " AppImage(s)")
+            elif app.source.isCatalog:
+              app.loadCatalog(app.source, force = true)
             else:
-              app.loadCatalog(force = true)
+              app.searchGitHub()
 
         MenuButton {.addRight.}:
           icon = "open-menu-symbolic"
@@ -789,8 +848,8 @@ method view(app: AppState): Widget =
                     app.launch(path)
                 Button {.expand: false, vAlign: AlignCenter.}:
                   text = "Install"
-                  tooltip = (if path.parentDir.normalizedPath == defaultInstallDir().normalizedPath: ""
-                             else: "Move it to " & tildify(defaultInstallDir()) & ", ") &
+                  tooltip = (if needsMove(path): "Move it to " & tildify(defaultInstallDir()) & ", "
+                             else: "") &
                             "add it to the app menu and give it an alias"
                   style = [ButtonSuggested]
                   proc clicked() =
@@ -801,6 +860,39 @@ method view(app: AppState): Widget =
                   style = [ButtonFlat]
                   proc clicked() =
                     app.opened.keepItIf(it != path)
+
+          let strays = if app.cfg.offerMove and not app.moveOfferHidden: app.moveCandidates()
+                       else: @[]
+          if strays.len > 0:
+            Frame {.expand: false.}:
+              Box(orient = OrientX, spacing = 8, margin = 8):
+                Label:
+                  text = (if strays.len == 1: strays[0].extractFilename & " is"
+                          else: $strays.len & " AppImages are") &
+                         " outside " & tildify(defaultInstallDir()) & ". Move " &
+                         (if strays.len == 1: "it" else: "them") &
+                         " there to keep your AppImages in one place? " &
+                         "Aliases, update sources and menu entries move along."
+                  tooltip = strays.mapIt(tildify(it)).join("\n")
+                  xAlign = 0
+                  wrap = true
+                Button {.expand: false, vAlign: AlignCenter.}:
+                  text = if strays.len == 1: "Move" else: "Move all"
+                  style = [ButtonSuggested]
+                  proc clicked() =
+                    app.moveToCentral(strays)
+                Button {.expand: false, vAlign: AlignCenter.}:
+                  text = "Not now"
+                  style = [ButtonFlat]
+                  proc clicked() =
+                    app.moveOfferHidden = true
+                Button {.expand: false, vAlign: AlignCenter.}:
+                  text = "Don't ask again"
+                  style = [ButtonFlat]
+                  proc clicked() =
+                    app.cfg.offerMove = false
+                    app.save()
+                    app.report(@[], "You can still move an AppImage from its ⋯ menu")
 
           if app.apps.len == 0:
             Label:
@@ -931,6 +1023,13 @@ method view(app: AppState): Widget =
                                 proc clicked() =
                                   app.setUpdateSource(path, sourceDraft)
                             Separator {.expand: false.}
+                            if needsMove(path):
+                              Button {.expand: false.}:
+                                text = "Move to " & tildify(defaultInstallDir())
+                                tooltip = "Keeps its alias, update source and menu entry"
+                                sensitive = update.state notin {Checking, Updating}
+                                proc clicked() =
+                                  app.moveToCentral(@[path])
                             Button {.expand: false.}:
                               text = if integrated: "Remove from app menu" else: "Add to app menu"
                               sensitive = not missing
@@ -948,28 +1047,28 @@ method view(app: AppState): Widget =
           Box(orient = OrientX, spacing = 6) {.expand: false.}:
             SearchEntry:
               text = app.query
-              tooltip = if app.source == 0: "Filter the AppImageHub catalog"
+              tooltip = if app.source.isCatalog: "Filter the " & $app.source & " catalog"
                         else: "Press Enter to search GitHub"
               proc changed(query: string) =
                 app.query = query
-                if app.source == 0: app.refreshHub()
+                app.refreshCatalog()
               proc activate() =
-                if app.source == 1: app.searchGitHub()
+                if not app.source.isCatalog: app.searchGitHub()
             DropDown {.expand: false.}:
-              items = @[$FromAppImageHub, $FromGitHub]
-              selected = app.source
-              tooltip = "Where to search"
+              items = CatalogSource.toSeq.mapIt($it)
+              selected = ord(app.source)
+              tooltip = "AppImageHub: the community catalog · pkgforge-dev: self-contained " &
+                        "Anylinux AppImages that run on any distro · GitHub: search all repositories"
               proc select(item: int) =
-                app.source = item
-                app.searchError = ""
-                if item == 1 and app.query.strip.len > 0: app.searchGitHub()
+                app.selectSource(CatalogSource(item))
 
-          if app.catalogLoading or app.searchLoading:
+          if app.source in app.catalogLoading or app.searchLoading:
             Box(orient = OrientX, spacing = 8) {.expand: false.}:
               Spinner {.expand: false.}:
                 spinning = true
               Label:
-                text = if app.searchLoading: "Searching GitHub…" else: "Loading the AppImageHub catalog…"
+                text = if app.source.isCatalog: "Loading the " & $app.source & " catalog…"
+                       else: "Searching GitHub…"
                 xAlign = 0
                 style = [StyleClass("dim-label")]
 
@@ -981,12 +1080,12 @@ method view(app: AppState): Widget =
               style = [StyleClass("error")]
 
           if items.len == 0:
-            if not app.catalogLoading and not app.searchLoading:
+            if app.source notin app.catalogLoading and not app.searchLoading:
               Label:
-                text = if app.source == 1 and app.query.strip.len == 0:
+                text = if app.source == FromGitHub and app.query.strip.len == 0:
                          "Type a name and press Enter to search GitHub for projects that publish AppImages."
-                       elif app.source == 1 and app.searchError.len == 0: "No GitHub projects found."
-                       elif app.source == 0 and app.catalog.len > 0: "No apps match your search."
+                       elif app.source == FromGitHub and app.searchError.len == 0: "No GitHub projects found."
+                       elif app.source.isCatalog and app.catalogs[app.source].len > 0: "No apps match your search."
                        else: ""
                 wrap = true
                 style = [StyleClass("dim-label")]
