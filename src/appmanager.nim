@@ -8,32 +8,6 @@ import appmanager/core
 
 const AppId = "dev.appmanager.AppManager"
 
-proc gtk_label_set_selectable(label: GtkWidget, setting: cbool) {.importc, cdecl.}
-
-renderable SelectableLabel of BaseWidget:
-  ## Label whose text can be selected and copied (owlkettle's Label can't).
-  text: string
-  xAlign: float = 0.5
-  ellipsize: EllipsizeMode
-
-  hooks:
-    beforeBuild:
-      state.internalWidget = gtk_label_new("")
-      gtk_label_set_selectable(state.internalWidget, cbool(1))
-
-  hooks text:
-    property:
-      gtk_label_set_text(state.internalWidget, state.text.cstring)
-
-  hooks xAlign:
-    property:
-      gtk_label_set_xalign(state.internalWidget, state.xAlign.cfloat)
-
-  hooks ellipsize:
-    property:
-      gtk_label_set_ellipsize(state.internalWidget,
-                              PangoEllipsizeMode(ord(state.ellipsize)))
-
 viewable App:
   cfg: Config
   apps: seq[AppImage]
@@ -206,12 +180,19 @@ method view(app: AppState): Widget =
                         xAlign = 0
                         ellipsize = EllipsizeEnd
                         style = [LabelHeading]
-                      SelectableLabel:
+                      Label:
                         text = path
                         xAlign = 0
                         ellipsize = EllipsizeMiddle
                         tooltip = path
                         style = [StyleClass("dim-label"), StyleClass("caption")]
+                    Button {.expand: false.}:
+                      icon = "edit-copy-symbolic"
+                      tooltip = "Copy AppImage path"
+                      style = [ButtonFlat]
+                      proc clicked() =
+                        copyToClipboard(path)
+                        app.report(@[], "Copied " & path)
                     Entry {.expand: false.}:
                       text = draft
                       placeholder = suggestAlias(path.extractFilename)
