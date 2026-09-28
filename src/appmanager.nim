@@ -15,7 +15,6 @@ renderable SelectableLabel of BaseWidget:
   text: string
   xAlign: float = 0.5
   ellipsize: EllipsizeMode
-  wrap: bool
 
   hooks:
     beforeBuild:
@@ -34,10 +33,6 @@ renderable SelectableLabel of BaseWidget:
     property:
       gtk_label_set_ellipsize(state.internalWidget,
                               PangoEllipsizeMode(ord(state.ellipsize)))
-
-  hooks wrap:
-    property:
-      gtk_label_set_wrap(state.internalWidget, cbool(ord(state.wrap)))
 
 viewable App:
   cfg: Config
@@ -78,6 +73,10 @@ proc tildify(path: string): string =
   let home = getHomeDir().strip(leading = false, chars = {'/'})
   if path == home or path.startsWith(home & "/"): "~" & path[home.len .. ^1]
   else: path
+
+proc copyToClipboard(text: string) =
+  gdk_clipboard_set_text(gdk_display_get_clipboard(gdk_display_get_default()),
+                         text.cstring, text.len.cint)
 
 proc saveAlias(app: AppState, path, alias: string) =
   var cfg = app.cfg
@@ -169,11 +168,19 @@ method view(app: AppState): Widget =
                       app.rescan()
 
       Box(orient = OrientY, spacing = 8, margin = 12):
-        SelectableLabel {.expand: false.}:
-          text = app.pathHint()
-          xAlign = 0
-          wrap = true
-          style = [StyleClass("dim-label")]
+        Box(orient = OrientX, spacing = 6) {.expand: false.}:
+          Label:
+            text = app.pathHint()
+            xAlign = 0
+            wrap = true
+            style = [StyleClass("dim-label")]
+          Button {.expand: false.}:
+            icon = "edit-copy-symbolic"
+            tooltip = "Copy folder path"
+            style = [ButtonFlat]
+            proc clicked() =
+              copyToClipboard(app.cfg.binDir)
+              app.report(@[], "Copied " & app.cfg.binDir)
 
         if app.apps.len == 0:
           Label:
