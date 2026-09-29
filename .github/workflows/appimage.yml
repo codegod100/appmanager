@@ -10,14 +10,13 @@ name: AppImage
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: appimage-${{ github.event_name == 'pull_request' && github.ref || 'release' }}
+  group: appimage-release
   cancel-in-progress: false
 
 jobs:
