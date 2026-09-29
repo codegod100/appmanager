@@ -239,6 +239,8 @@ Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
     check "Icon=foo\n" notin entry
     check entry.count(DesktopMarkerKey) == 1
     check entry.find(DesktopMarkerKey) < entry.find("[Desktop Action new]")
+    check entry.count(DesktopVersionKey & "=" & DesktopVersion & "\n") == 1
+    check rewriteDesktopEntry(entry, "/apps/Foo.AppImage", "/icons/foo.png") == entry
     let generated = rewriteDesktopEntry("", "/apps/Bar-1.0.AppImage", "")
     check "Name=Bar-1.0" in generated
     check "Exec=/apps/Bar-1.0.AppImage" in generated
@@ -270,8 +272,16 @@ Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
     let icon = home / ".local/share/icons/hicolor/64x64/apps" / desktopId(app) & ".png"
     check "Icon=" & desktopId(app) & "\n" in content
     check readFile(icon).startsWith("\x89PNG")
+    check not needsReintegration(app)
+    # Entries from before the version key get redone.
+    writeFile(entry, "[Desktop Entry]\nName=Foo-1.0\n" & DesktopMarkerKey & "=" & app & "\n")
+    check needsReintegration(app)
+    discard integrate(app)
+    check not needsReintegration(app)
+    check "Name=Foo\n" in readFile(entry)
     check unintegrate(app)
     check not isIntegrated(app)
+    check not needsReintegration(app)
     check not fileExists(icon)
     check not unintegrate(app)
 

@@ -15,6 +15,8 @@ const
   GitHubApi* = "https://api.github.com"
   CatalogMaxAge* = initDuration(days = 1)
   DesktopMarkerKey* = "X-AppManager-AppImage"
+  DesktopVersionKey* = "X-AppManager-Version"
+  DesktopVersion* = "2"  ## Bump when `integrate` gets better, to redo old entries
   DesktopPrefix = "appmanager-"
 
 type
@@ -605,6 +607,7 @@ proc rewriteDesktopEntry*(content, appPath, icon: string): string =
       if group == "[Desktop Entry]":
         while lines.len > 0 and lines[^1].strip.len == 0: lines.setLen(lines.len - 1)
         lines.add(DesktopMarkerKey & "=" & appPath)
+        lines.add(DesktopVersionKey & "=" & DesktopVersion)
         if icon.len > 0: lines.add("Icon=" & icon)
         lines.add("")
       group = trimmed
@@ -612,7 +615,7 @@ proc rewriteDesktopEntry*(content, appPath, icon: string): string =
       continue
     let eq = line.find('=')
     let key = if eq < 0: "" else: line[0 ..< eq].strip
-    if key in ["TryExec", DesktopMarkerKey]: continue
+    if key in ["TryExec", DesktopMarkerKey, DesktopVersionKey]: continue
     if key == "Icon" and icon.len > 0 and group == "[Desktop Entry]": continue
     if key == "Exec" and group.startsWith("[Desktop"):
       lines.add("Exec=" & replaceExec(line[eq + 1 .. ^1].strip, exec))
@@ -621,6 +624,7 @@ proc rewriteDesktopEntry*(content, appPath, icon: string): string =
   if group == "[Desktop Entry]":
     while lines.len > 0 and lines[^1].strip.len == 0: lines.setLen(lines.len - 1)
     lines.add(DesktopMarkerKey & "=" & appPath)
+    lines.add(DesktopVersionKey & "=" & DesktopVersion)
     if icon.len > 0: lines.add("Icon=" & icon)
   lines.join("\n").strip(leading = false) & "\n"
 
@@ -630,6 +634,21 @@ proc desktopEntryFor*(appPath: string): string =
   if fileExists(path): path else: ""
 
 proc isIntegrated*(appPath: string): bool = desktopEntryFor(appPath).len > 0
+
+proc readDesktopKey(content, key: string): string =
+  var inEntry = false
+  for line in content.splitLines:
+    let t = line.strip
+    if t.startsWith("["): inEntry = t == "[Desktop Entry]"
+    elif inEntry and t.startsWith(key & "="): return t[key.len + 1 .. ^1].strip
+
+proc needsReintegration*(appPath: string): bool =
+  ## Whether `appPath` has a menu entry written by an older, less capable
+  ## `integrate` (e.g. a stub that missed the AppImage's own .desktop file).
+  let entry = desktopEntryFor(appPath)
+  if entry.len == 0: return false
+  try: readDesktopKey(readFile(entry), DesktopVersionKey) != DesktopVersion
+  except IOError: false
 
 proc iconExt(data: string): string =
   if data.startsWith("\x89PNG"): ".png"
@@ -711,13 +730,6 @@ proc extractFromAppImage*(appPath, pattern, dir: string): bool =
   ## `--appimage-extract` into `dir`/squashfs-root. Gives up after 15 s, in
   ## case an unusual runtime starts the app instead.
   runWithTimeout(appPath, @["--appimage-extract", pattern], dir)
-
-proc readDesktopKey(content, key: string): string =
-  var inEntry = false
-  for line in content.splitLines:
-    let t = line.strip
-    if t.startsWith("["): inEntry = t == "[Desktop Entry]"
-    elif inEntry and t.startsWith(key & "="): return t[key.len + 1 .. ^1].strip
 
 proc integrate*(appPath: string): string =
   ## Adds `appPath` to the application menu (like Gear Lever): copies its

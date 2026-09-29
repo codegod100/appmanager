@@ -424,6 +424,30 @@ proc toggleMenuEntry(app: AppState, path: string) =
   except OSError, IOError:
     app.fail("Could not change the menu entry: " & getCurrentExceptionMsg())
 
+proc redoOldMenuEntries(app: AppState) =
+  ## Rebuilds menu entries written by older versions (which could miss the
+  ## AppImage's own .desktop file), one AppImage per idle tick so the window
+  ## stays responsive. Entries the user removed stay removed.
+  var queue = app.apps.mapIt(it.path).filterIt(needsReintegration(it))
+  if queue.len == 0: return
+  var redone = 0
+  discard addGlobalIdleTask(proc(): bool =
+    if queue.len > 0:
+      let path = queue.pop()
+      try:
+        discard integrate(path)
+        inc redone
+      except OSError, IOError:
+        discard
+      return true
+    if redone > 0:
+      refreshMenus()
+      if app.status.len == 0:
+        app.report(@[], "Updated the app menu entries of " & $redone &
+          (if redone == 1: " AppImage" else: " AppImages"))
+        app.refresh()
+    false)
+
 proc uninstall(app: AppState, path: string) =
   let name = path.extractFilename
   let (res, _) = app.open: gui:
@@ -1286,6 +1310,7 @@ proc presentWindow(gapp: GApplication) =
     let window = mainState.unwrapInternalWidget()
     gtk_application_add_window(gapp, window)
     discard g_signal_connect(window, "destroy", onWindowDestroyed, gapp.pointer)
+    mainState.redoOldMenuEntries()
   gtk_window_present(mainState.unwrapInternalWidget())
 
 proc onActivate(gapp: GApplication, data: pointer) {.cdecl.} =
