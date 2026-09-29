@@ -49,6 +49,19 @@ cp data/icons/hicolor/scalable/apps/$APP_ID.svg "$APPDIR/usr/share/icons/hicolor
 
 cd "$BUILD"
 rm -f "$LDAI_OUTPUT" "$LDAI_OUTPUT.zsync"
+
+# linuxdeploy-plugin-gtk's own AppRun hook (apprun-hooks/linuxdeploy-plugin-gtk.sh)
+# forces GTK_THEME=Adwaita:<light|dark> based on a 1s D-Bus portal probe that
+# falls back to GNOME's gsettings on failure. That pinned theme overrides
+# GTK4's own native portal-based dark-mode detection, which is what makes the
+# source build follow the desktop color scheme. Hooks run in filename-sort
+# order, so this one (sorting after "linuxdeploy-plugin-gtk.sh") undoes the
+# override and lets GTK4 detect the color scheme itself again.
+mkdir -p "$APPDIR/apprun-hooks"
+cat > "$APPDIR/apprun-hooks/zz-follow-system-theme.sh" <<'EOF'
+unset GTK_THEME
+EOF
+
 linuxdeploy \
   --appdir "$APPDIR" \
   --executable "$ROOT/$APP" \
