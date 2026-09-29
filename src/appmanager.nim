@@ -825,8 +825,7 @@ proc launch(app: AppState, path: string) =
     app.fail("Could not make " & name & " executable: " & getCurrentExceptionMsg())
     return
   # Through a backgrounded shell, so the app outlives us and isn't our child.
-  runAsync("/bin/sh", @["-c", "\"$0\" </dev/null >/dev/null 2>&1 &", path],
-           proc(code: int, output: string) = discard)
+  runDetached("/bin/sh", @["-c", "\"$0\" </dev/null >/dev/null 2>&1 &", path])
   app.report(@[], "Started " & name)
 
 proc adopt(app: AppState, path: string) =
