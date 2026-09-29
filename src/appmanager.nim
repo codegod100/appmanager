@@ -3,7 +3,7 @@
 ## AppImageHub or GitHub, keeps them up to date and adds them to the
 ## application menu.
 
-import std/[os, strutils, tables, sets, json, sequtils]
+import std/[os, strutils, tables, sets, json, sequtils, times]
 import owlkettle
 import owlkettle/bindings/gtk
 import owlkettle/mainloop
@@ -13,6 +13,7 @@ const
   AppId = "dev.appmanager.AppManager"
   MaxResults = 150
   MaxParallelChecks = 4
+  MinRedrawSecs = 0.25 ## Download progress must not redraw the window more often
   ZsyncHeaderRange = "0-16383" ## The header is all we need from a .zsync
 
 type
@@ -67,7 +68,9 @@ proc rescan(app: AppState) =
   for a in app.apps:
     app.embedded[a.path] = readUpdateInfo(a.path)
 
-var redrawQueued = false
+var
+  redrawQueued = false
+  lastRedraw = 0.0
 
 proc refresh(app: AppState) =
   ## Redraws after a background job changed the state. Deferred to an idle
@@ -76,10 +79,16 @@ proc refresh(app: AppState) =
   ## several downloads into one redraw.
   if redrawQueued: return
   redrawQueued = true
-  discard addGlobalIdleTask(proc(): bool =
+  proc draw(): bool =
     redrawQueued = false
+    lastRedraw = epochTime()
     discard app.redraw()
-    false)
+    false
+  # Rebuilding the whole window on every 100 ms download tick can starve the
+  # main loop, so redraws are spaced out.
+  let wait = int((MinRedrawSecs - (epochTime() - lastRedraw)) * 1000)
+  if wait > 0: discard addGlobalTimeout(wait, draw)
+  else: discard addGlobalIdleTask(draw)
 
 proc report(app: AppState, notes: seq[string], success: string) =
   app.statusIsError = false
