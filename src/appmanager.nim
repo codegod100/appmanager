@@ -547,6 +547,8 @@ proc moveToCentral(app: AppState, paths: seq[string]) =
 
 proc refreshCatalog(app: AppState) =
   if app.source.isCatalog:
+    if app.source == FromPkgforge:
+      app.catalogs[FromPkgforge].enrichPkgforge(app.catalogs[FromAppImageHub])
     app.catalogResults = searchCatalog(app.catalogs[app.source], app.query, int.high)
 
 proc loadCatalog(app: AppState, source: CatalogSource, force = false) =
@@ -706,6 +708,8 @@ proc selectSource(app: AppState, source: CatalogSource) =
   if source.isCatalog:
     app.refreshCatalog()
     if app.catalogs[source].len == 0: app.loadCatalog(source)
+    if source == FromPkgforge and app.catalogs[FromAppImageHub].len == 0:
+      app.loadCatalog(FromAppImageHub)  # supplies the descriptions
   elif app.query.strip.len > 0:
     app.searchGitHub()
 

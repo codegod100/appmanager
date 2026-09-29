@@ -229,6 +229,23 @@ proc parsePkgforge*(markdown: string): seq[CatalogApp] =
                else: "Publishes an Anylinux AppImage",
       repo: repo, categories: @["Anylinux"], stars: -1, source: FromPkgforge))
 
+proc enrichPkgforge*(apps: var seq[CatalogApp], described: seq[CatalogApp]) =
+  ## The pkgforge-dev README lists names only, so entries carry a generic
+  ## placeholder summary. Borrows the real description from a described
+  ## catalog entry with the same name or repo.
+  var byKey = initTable[string, string]()
+  proc key(s: string): string = s.toLowerAscii.multiReplace(("-", ""), ("_", ""), (" ", ""))
+  for d in described:
+    if d.summary.len == 0: continue
+    for k in [key(d.name), key(d.repo)]:
+      if k notin byKey: byKey[k] = d.summary
+  for a in apps.mitems:
+    if a.source != FromPkgforge or not a.summary.contains("Anylinux AppImage"): continue
+    for k in [key(a.name), key(a.repo)]:
+      if k in byKey:
+        a.summary = byKey[k]
+        break
+
 proc parseCatalog*(source: CatalogSource, data: string): seq[CatalogApp] =
   ## Parses a downloaded catalog. Raises on malformed JSON.
   case source
