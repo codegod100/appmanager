@@ -21,8 +21,10 @@ concurrency:
 
 jobs:
   appimage:
-    # Oldest supported runner: the AppImage runs on distros with glibc >= 2.35.
-    runs-on: ubuntu-22.04
+    # The AppImage bundles this runner's GTK. 22.04's GTK 4.6 makes the window
+    # stop accepting clicks during an update (system GTK 4.22 doesn't), so
+    # build on 24.04 (GTK 4.14). That raises the minimum to glibc >= 2.39.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
