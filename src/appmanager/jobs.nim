@@ -46,6 +46,25 @@ proc runAsync*(exe: string, args: seq[string], onDone: DoneProc,
     false
   discard addGlobalTimeout(PollMs, tick)
 
+proc runDetached*(exe: string, args: seq[string]) =
+  ## Starts `exe` with no pipes to it and forgets about it. `runAsync` would
+  ## capture output through an OS pipe, but `startProcess` dup2s that pipe's
+  ## write end onto the child's stdout without closing the original fd, so a
+  ## long-lived child inherits a stray copy of it; that keeps the pipe open
+  ## and makes our later `readAll` block until the child exits, freezing the
+  ## window for as long as it runs. `poParentStreams` avoids creating the
+  ## pipe in the first place.
+  var p: Process
+  try:
+    p = startProcess(exe, args = args, options = {poUsePath, poParentStreams})
+  except OSError:
+    return
+  proc tick(): bool =
+    if p.running: return true
+    p.close()
+    false
+  discard addGlobalTimeout(PollMs, tick)
+
 proc stopJobs*() =
   ## Terminates every helper still running, so quitting doesn't leave
   ## downloads or menu updates behind.
