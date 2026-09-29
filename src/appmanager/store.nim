@@ -15,6 +15,8 @@ const
   GitHubApi* = "https://api.github.com"
   CatalogMaxAge* = initDuration(days = 1)
   DesktopMarkerKey* = "X-AppManager-AppImage"
+  DesktopVersionKey* = "X-AppManager-Version"
+  DesktopVersion* = "2"  ## Bump when `integrate` gets better, to redo old entries
   DesktopPrefix = "appmanager-"
 
 type
@@ -605,6 +607,7 @@ proc rewriteDesktopEntry*(content, appPath, icon: string): string =
       if group == "[Desktop Entry]":
         while lines.len > 0 and lines[^1].strip.len == 0: lines.setLen(lines.len - 1)
         lines.add(DesktopMarkerKey & "=" & appPath)
+        lines.add(DesktopVersionKey & "=" & DesktopVersion)
         if icon.len > 0: lines.add("Icon=" & icon)
         lines.add("")
       group = trimmed
@@ -612,7 +615,7 @@ proc rewriteDesktopEntry*(content, appPath, icon: string): string =
       continue
     let eq = line.find('=')
     let key = if eq < 0: "" else: line[0 ..< eq].strip
-    if key in ["TryExec", DesktopMarkerKey]: continue
+    if key in ["TryExec", DesktopMarkerKey, DesktopVersionKey]: continue
     if key == "Icon" and icon.len > 0 and group == "[Desktop Entry]": continue
     if key == "Exec" and group.startsWith("[Desktop"):
       lines.add("Exec=" & replaceExec(line[eq + 1 .. ^1].strip, exec))
@@ -621,6 +624,7 @@ proc rewriteDesktopEntry*(content, appPath, icon: string): string =
   if group == "[Desktop Entry]":
     while lines.len > 0 and lines[^1].strip.len == 0: lines.setLen(lines.len - 1)
     lines.add(DesktopMarkerKey & "=" & appPath)
+    lines.add(DesktopVersionKey & "=" & DesktopVersion)
     if icon.len > 0: lines.add("Icon=" & icon)
   lines.join("\n").strip(leading = false) & "\n"
 
@@ -630,6 +634,21 @@ proc desktopEntryFor*(appPath: string): string =
   if fileExists(path): path else: ""
 
 proc isIntegrated*(appPath: string): bool = desktopEntryFor(appPath).len > 0
+
+proc readDesktopKey(content, key: string): string =
+  var inEntry = false
+  for line in content.splitLines:
+    let t = line.strip
+    if t.startsWith("["): inEntry = t == "[Desktop Entry]"
+    elif inEntry and t.startsWith(key & "="): return t[key.len + 1 .. ^1].strip
+
+proc needsReintegration*(appPath: string): bool =
+  ## Whether `appPath` has a menu entry written by an older, less capable
+  ## `integrate` (e.g. a stub that missed the AppImage's own .desktop file).
+  let entry = desktopEntryFor(appPath)
+  if entry.len == 0: return false
+  try: readDesktopKey(readFile(entry), DesktopVersionKey) != DesktopVersion
+  except IOError: false
 
 proc iconExt(data: string): string =
   if data.startsWith("\x89PNG"): ".png"
@@ -712,13 +731,6 @@ proc extractFromAppImage*(appPath, pattern, dir: string): bool =
   ## case an unusual runtime starts the app instead.
   runWithTimeout(appPath, @["--appimage-extract", pattern], dir)
 
-proc readDesktopKey(content, key: string): string =
-  var inEntry = false
-  for line in content.splitLines:
-    let t = line.strip
-    if t.startsWith("["): inEntry = t == "[Desktop Entry]"
-    elif inEntry and t.startsWith(key & "="): return t[key.len + 1 .. ^1].strip
-
 proc integrate*(appPath: string): string =
   ## Adds `appPath` to the application menu (like Gear Lever): copies its
   ## .desktop file and icon out of the AppImage and points them at it.
@@ -730,40 +742,44 @@ proc integrate*(appPath: string): string =
   if fpUserExec notin getFilePermissions(appPath):
     setFilePermissions(appPath, getFilePermissions(appPath) + {fpUserExec})
   let root = tmp / "squashfs-root"
+
+  proc extractFile(want: string): string =
+    ## Reads `want` out of the AppImage, following symlinks (linuxdeploy
+    ## makes the top-level .desktop and .DirIcon links into usr/share),
+    ## which `--appimage-extract` only extracts as links. "" if missing.
+    var want = want
+    for _ in 0 ..< 4:
+      if not extractFromAppImage(appPath, want, tmp): return
+      let got = root / want
+      if symlinkExists(got):
+        want = (want.parentDir / expandSymlink(got)).normalizedPath
+        if want.startsWith("/") or want.startsWith(".."): return
+        continue
+      if fileExists(got):
+        try: return readFile(got)
+        except IOError: discard
+      return
+
   var desktop = ""
   if extractFromAppImage(appPath, "*.desktop", tmp) and dirExists(root):
     # The entry the AppImage spec requires sits at the top level.
-    var found = ""
     for kind, path in walkDir(root):
-      if kind == pcFile and path.endsWith(".desktop"): found = path
-    if found.len == 0:
+      if kind in {pcFile, pcLinkToFile} and path.endsWith(".desktop"):
+        desktop = extractFile(path.extractFilename)
+        if desktop.len > 0: break
+    if desktop.len == 0:
       for path in walkDirRec(root):
         if path.endsWith(".desktop"):
-          found = path
+          try: desktop = readFile(path)
+          except IOError: discard
           break
-    if found.len > 0:
-      try: desktop = readFile(found)
-      except IOError: discard
-  var iconData = ""
-  var want = ".DirIcon"
-  for _ in 0 ..< 4:
-    if not extractFromAppImage(appPath, want, tmp): break
-    let got = root / want
-    if symlinkExists(got):
-      want = (want.parentDir / expandSymlink(got)).normalizedPath
-      if want.startsWith("/") or want.startsWith(".."): break
-      continue
-    if fileExists(got):
-      try: iconData = readFile(got)
-      except IOError: discard
-    break
+  var iconData = extractFile(".DirIcon")
   if iconData.len == 0 and desktop.len > 0:
     let name = readDesktopKey(desktop, "Icon")
     if name.len > 0 and '/' notin name:
       for ext in [".png", ".svg", ".xpm"]:
-        if extractFromAppImage(appPath, name & ext, tmp) and fileExists(root / name & ext):
-          iconData = readFile(root / name & ext)
-          break
+        iconData = extractFile(name & ext)
+        if iconData.len > 0: break
   let id = desktopId(appPath)
   var icon = ""
   let ext = iconExt(iconData)

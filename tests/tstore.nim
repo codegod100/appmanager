@@ -47,13 +47,18 @@ proc release(tag: string, assets: openArray[string], pre = false,
   %*{"tag_name": tag, "prerelease": pre, "draft": draft, "assets": list}
 
 proc writeFakeRuntime(path: string) =
-  ## A stand-in AppImage whose runtime supports --appimage-extract.
+  ## A stand-in AppImage whose runtime supports --appimage-extract. Like
+  ## linuxdeploy's, its top-level .desktop is a link into usr/share, and
+  ## patterns only match whole paths, so the link comes out on its own.
   createDir(path.parentDir)
   writeFile(path, """#!/bin/sh
 [ "$1" = --appimage-extract ] || exit 1
 mkdir -p squashfs-root
 case "$2" in
-  '*.desktop') printf '[Desktop Entry]\nType=Application\nName=Foo\nExec=AppRun %%F\nIcon=foo\n' > squashfs-root/foo.desktop ;;
+  '*.desktop'|foo.desktop) ln -sf usr/share/applications/foo.desktop squashfs-root/foo.desktop ;;
+  usr/share/applications/foo.desktop)
+    mkdir -p squashfs-root/usr/share/applications
+    printf '[Desktop Entry]\nType=Application\nName=Foo\nExec=AppRun %%F\nIcon=foo\n' > squashfs-root/usr/share/applications/foo.desktop ;;
   .DirIcon) ln -sf foo.png squashfs-root/.DirIcon ;;
   foo.png) printf '\211PNG\r\n\032\n\0\0\0\rIHDR\0\0\0\100\0\0\0\100' > squashfs-root/foo.png ;;
 esac
@@ -234,6 +239,8 @@ Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
     check "Icon=foo\n" notin entry
     check entry.count(DesktopMarkerKey) == 1
     check entry.find(DesktopMarkerKey) < entry.find("[Desktop Action new]")
+    check entry.count(DesktopVersionKey & "=" & DesktopVersion & "\n") == 1
+    check rewriteDesktopEntry(entry, "/apps/Foo.AppImage", "/icons/foo.png") == entry
     let generated = rewriteDesktopEntry("", "/apps/Bar-1.0.AppImage", "")
     check "Name=Bar-1.0" in generated
     check "Exec=/apps/Bar-1.0.AppImage" in generated
@@ -260,13 +267,21 @@ Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
     check isIntegrated(app)
     check entry.startsWith(home / ".local/share/applications/appmanager-foo-1-0-")
     let content = readFile(entry)
-    check "Name=Foo" in content
+    check "Name=Foo\n" in content
     check "Exec=" & app & " %F" in content
     let icon = home / ".local/share/icons/hicolor/64x64/apps" / desktopId(app) & ".png"
     check "Icon=" & desktopId(app) & "\n" in content
     check readFile(icon).startsWith("\x89PNG")
+    check not needsReintegration(app)
+    # Entries from before the version key get redone.
+    writeFile(entry, "[Desktop Entry]\nName=Foo-1.0\n" & DesktopMarkerKey & "=" & app & "\n")
+    check needsReintegration(app)
+    discard integrate(app)
+    check not needsReintegration(app)
+    check "Name=Foo\n" in readFile(entry)
     check unintegrate(app)
     check not isIntegrated(app)
+    check not needsReintegration(app)
     check not fileExists(icon)
     check not unintegrate(app)
 
