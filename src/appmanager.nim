@@ -426,27 +426,23 @@ proc toggleMenuEntry(app: AppState, path: string) =
 
 proc redoOldMenuEntries(app: AppState) =
   ## Rebuilds menu entries written by older versions (which could miss the
-  ## AppImage's own .desktop file), one AppImage per idle tick so the window
-  ## stays responsive. Entries the user removed stay removed.
+  ## AppImage's own .desktop file), one AppImage at a time in a child
+  ## process so the window stays responsive and can always be closed.
+  ## Entries the user removed stay removed.
   var queue = app.apps.mapIt(it.path).filterIt(needsReintegration(it))
-  if queue.len == 0: return
   var redone = 0
-  discard addGlobalIdleTask(proc(): bool =
+  proc next() =
     if queue.len > 0:
-      let path = queue.pop()
-      try:
-        discard integrate(path)
-        inc redone
-      except OSError, IOError:
-        discard
-      return true
-    if redone > 0:
+      integrateAsync(queue.pop(), proc(error: string) =
+        if error.len == 0: inc redone
+        next())
+    elif redone > 0:
       refreshMenus()
       if app.status.len == 0:
         app.report(@[], "Updated the app menu entries of " & $redone &
           (if redone == 1: " AppImage" else: " AppImages"))
         app.refresh()
-    false)
+  next()
 
 proc gtk_widget_get_next_sibling(widget: GtkWidget): GtkWidget {.importc, cdecl.}
 proc gtk_popover_get_type(): GType {.importc, cdecl.}
@@ -1321,6 +1317,7 @@ proc g_application_quit(app: GApplication) {.importc, cdecl.}
 proc onWindowDestroyed(window: GtkWidget, gapp: pointer) {.cdecl.} =
   # GApplication only exits once nothing holds it any more; closing the main
   # window means we're done, whatever else is still registered or running.
+  stopJobs()
   g_application_quit(GApplication(gapp))
 
 proc presentWindow(gapp: GApplication) =
@@ -1353,9 +1350,20 @@ proc run(widget: Widget, icons: seq[string]) =
   discard g_signal_connect(gapp, "open", onOpen, nil)
   discard g_application_run(gapp)
   # Don't linger on anything left behind (pending jobs, nested dialog loops).
+  stopJobs()
   quit(QuitSuccess)
 
 when isMainModule:
+  let params = commandLineParams()
+  if params.len == 2 and params[0] == IntegrateFlag:
+    # Run by `integrateAsync`, off the GUI's main loop.
+    killChildrenOnTerminate()
+    try:
+      discard integrate(params[1])
+      quit(QuitSuccess)
+    except OSError, IOError:
+      stdout.write(getCurrentExceptionMsg())
+      quit(QuitFailure)
   let cfg = loadConfig()
   # Without this the X11 WM_CLASS is the binary name ("AppRun.wrapped" inside
   # the AppImage), so docks can't match the window to our .desktop file's

@@ -6,7 +6,7 @@
 ## hand the results to the parsers below, which keeps this module testable
 ## and lets the GUI run downloads without blocking.
 
-import std/[os, strutils, json, algorithm, osproc, streams, times, tables, sequtils]
+import std/[os, strutils, json, algorithm, osproc, streams, times, tables, sequtils, posix]
 import core
 
 const
@@ -706,30 +706,60 @@ proc touchIconTheme() =
     try: setLastModificationTime(iconThemeDir(), getTime())
     except OSError: discard
 
+type
+  ExtractTimeout* = object of OSError
+  RunResult = enum Succeeded, Failed, TimedOut
+
+var runningGroup: Pid  ## Process group `runWithTimeout` is waiting on, or 0
+
+proc onTerminate(sig: cint) {.noconv.} =
+  if runningGroup > 0: discard posix.kill(-runningGroup, SIGKILL)
+  exitnow(1)
+
+proc killChildrenOnTerminate*() =
+  ## Makes SIGTERM also kill what `runWithTimeout` is running, which sits in
+  ## its own process group (so an app started by mistake doesn't outlive us).
+  posix.signal(SIGTERM, onTerminate)
+
 proc runWithTimeout(exe: string, args: seq[string], dir: string,
-                    timeoutMs = 15_000): bool =
-  ## Runs `exe` with its output discarded, killing it after `timeoutMs`.
+                    timeoutMs = 15_000): RunResult =
+  ## Runs `exe` with its output discarded, killing it and everything it
+  ## started after `timeoutMs`.
   var p: Process
   try:
-    p = startProcess("/bin/sh", workingDir = dir,
-                     args = @["-c", "exec \"$0\" \"$@\" >/dev/null 2>&1", exe] & args)
+    # Its own process group, so a runtime that starts the app instead of
+    # extracting can be killed along with whatever it spawned.
+    p = startProcess("/bin/sh", workingDir = dir, args = @["-c",
+      "exec >/dev/null 2>&1 </dev/null; " &
+      "command -v setsid >/dev/null && exec setsid \"$0\" \"$@\"; exec \"$0\" \"$@\"",
+      exe] & args)
   except OSError:
-    return false
-  defer: p.close()
+    return Failed
+  runningGroup = Pid(p.processID)
+  defer:
+    runningGroup = 0
+    p.close()
   let start = epochTime()
   while p.running:
     if (epochTime() - start) * 1000 > timeoutMs.float:
+      discard posix.kill(-Pid(p.processID), SIGKILL)
       p.kill()
       discard p.waitForExit()
-      return false
+      return TimedOut
     sleep(20)
-  p.peekExitCode == 0
+  if p.peekExitCode == 0: Succeeded else: Failed
 
 proc extractFromAppImage*(appPath, pattern, dir: string): bool =
   ## Extracts files matching `pattern` with the AppImage runtime's
-  ## `--appimage-extract` into `dir`/squashfs-root. Gives up after 15 s, in
-  ## case an unusual runtime starts the app instead.
-  runWithTimeout(appPath, @["--appimage-extract", pattern], dir)
+  ## `--appimage-extract` into `dir`/squashfs-root. Gives up after 15 s with
+  ## `ExtractTimeout`, in case an unusual runtime starts the app instead;
+  ## `integrate` then gives up rather than waiting that long for every file.
+  case runWithTimeout(appPath, @["--appimage-extract", pattern], dir)
+  of Succeeded: true
+  of Failed: false
+  of TimedOut:
+    raise newException(ExtractTimeout, appPath.extractFilename &
+      " did not extract its files within 15 s; is it an AppImage?")
 
 proc integrate*(appPath: string): string =
   ## Adds `appPath` to the application menu (like Gear Lever): copies its

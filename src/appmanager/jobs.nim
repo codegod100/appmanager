@@ -1,7 +1,7 @@
 ## Runs curl and other helpers in the background, polled from the GTK main
 ## loop, so downloads never freeze the window.
 
-import std/[os, osproc, streams, strutils, json]
+import std/[os, osproc, streams, strutils, json, sequtils]
 import owlkettle
 import store
 
@@ -12,7 +12,9 @@ type
   ProgressProc* = proc(fraction: float)
   BytesProc* = proc(bytes: BiggestInt)
 
-var tempCounter = 0
+var
+  tempCounter = 0
+  running: seq[Process]  ## Children of `runAsync` that haven't exited yet
 
 proc tempFile*(ext: string): string =
   inc tempCounter
@@ -29,10 +31,12 @@ proc runAsync*(exe: string, args: seq[string], onDone: DoneProc,
   except OSError:
     onDone(127, exe & " is not installed")
     return
+  running.add(p)
   proc tick(): bool =
     if p.running:
       if poll != nil: poll()
       return true
+    running.keepItIf(it != p)
     let code = p.peekExitCode
     var output = ""
     try: output = p.outputStream.readAll()
@@ -41,6 +45,14 @@ proc runAsync*(exe: string, args: seq[string], onDone: DoneProc,
     onDone(code, output.strip)
     false
   discard addGlobalTimeout(PollMs, tick)
+
+proc stopJobs*() =
+  ## Terminates every helper still running, so quitting doesn't leave
+  ## downloads or menu updates behind.
+  for p in running:
+    try: p.terminate()
+    except OSError: discard
+  running.setLen(0)
 
 proc curlError(url: string, code: int, output: string): string =
   result = if output.len > 0: output.replace("curl: ", "") else: "curl exited with " & $code
@@ -108,3 +120,16 @@ proc sha1Async*(path: string, onDone: proc(sha1, error: string)) =
       onDone(output[0 ..< 40].toLowerAscii, "")
     else:
       onDone("", "Could not hash " & path.extractFilename & ": " & output))
+
+const IntegrateFlag* = "--integrate"
+  ## Makes the binary add one AppImage to the app menu and exit; see
+  ## `integrateAsync`.
+
+proc integrateAsync*(path: string, onDone: proc(error: string)) =
+  ## Runs `integrate(path)` in a child process: extracting from an AppImage
+  ## can take a while (or hang until the timeout), which must not freeze the
+  ## window or keep it from closing.
+  runAsync(getAppFilename(), @[IntegrateFlag, path], proc(code: int, output: string) =
+    if code == 0: onDone("")
+    elif output.len > 0: onDone(output)
+    else: onDone("exit code " & $code))
