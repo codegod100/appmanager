@@ -1441,6 +1441,11 @@ when isMainModule:
     except OSError, IOError:
       stdout.write(getCurrentExceptionMsg())
       quit(QuitFailure)
+  # GTK's GL renderer can stall under some Mesa versions: the window keeps
+  # hovering but ignores clicks and can't be moved. Cairo avoids it. Must be
+  # set before GTK initialises; an explicit user choice wins.
+  if not existsEnv("GSK_RENDERER"):
+    putEnv("GSK_RENDERER", "cairo")
   let cfg = loadConfig()
   # Without this the X11 WM_CLASS is the binary name ("AppRun.wrapped" inside
   # the AppImage), so docks can't match the window to our .desktop file's
