@@ -91,8 +91,10 @@ the AppImage. The icon goes into the hicolor icon theme,
 `~/.local/share/icons/hicolor/<size>/apps/` (`scalable` for SVGs), under the
 same name as the entry, so `Icon=` can use that name. If you already have an
 icon cache there, it is rebuilt. Entries made by an older appmanager are
-rebuilt on startup (for example, ones that missed an AppImage's own
-`.desktop` file); entries you removed stay removed.
+rebuilt in the background on startup (for example, ones that missed an
+AppImage's own `.desktop` file); entries you removed stay removed. An
+AppImage that doesn't extract within 15 s (one whose runtime starts the app
+instead) is skipped, and whatever it started is killed.
 **Delete…** removes the AppImage, its alias and its menu entry.
 
 ### Opening AppImages from the file manager
