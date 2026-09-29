@@ -805,8 +805,8 @@ proc unintegrate*(appPath: string): bool =
   touchIconTheme()
 
 proc refreshMenus*() =
-  ## Asks the desktop to notice changed menu entries and icons, if the
-  ## tools exist. The icon cache is only rebuilt if the user already has
+  ## Asks the desktop (including KDE) to notice changed menu entries and
+  ## icons, if the tools exist. The icon cache is only rebuilt if the user already has
   ## one, since a stale cache would hide new icons.
   let tool = findExe("update-desktop-database")
   if tool.len > 0:
@@ -818,6 +818,20 @@ proc refreshMenus*() =
         discard runWithTimeout(cacheTool, @["-q", "-t", "-f", iconThemeDir()],
                                getTempDir(), 15_000)
         break
+  # KDE reads menu entries from its own ksycoca cache, so without this Plasma
+  # misses new entries and pins the AppImage's temporary mount instead.
+  for name in ["kbuildsycoca6", "kbuildsycoca5"]:
+    let sycoca = findExe(name)
+    if sycoca.len > 0:
+      discard runWithTimeout(sycoca, @[], getTempDir(), 15_000)
+      break
+  # Running KDE apps (plasmashell's launchers) keep icons in memory until
+  # told the theme changed.
+  let dbusSend = findExe("dbus-send")
+  if dbusSend.len > 0:
+    discard runWithTimeout(dbusSend, @["--session", "--type=signal",
+      "/KIconLoader", "org.kde.KIconLoader.iconChanged", "int32:0"],
+      getTempDir(), 5_000)
 
 # ---------------------------------------------------------------------------
 # Opening AppImages from the file manager
