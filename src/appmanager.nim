@@ -1188,6 +1188,13 @@ method view(app: AppState): Widget =
                         Popover:
                           Box(orient = OrientY, spacing = 6, margin = 8, sizeRequest = (340, -1)):
                             Button {.expand: false.}:
+                              text = "Run"
+                              tooltip = "Start " & path.extractFilename
+                              sensitive = not missing
+                              proc clicked() =
+                                app.closePopovers()
+                                app.launch(path)
+                            Button {.expand: false.}:
                               text = "Check for updates"
                               sensitive = not missing and update.state notin {Checking, Updating}
                               proc clicked() =
