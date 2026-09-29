@@ -311,9 +311,6 @@ proc applyUpdate(app: AppState, path: string) =
       return
     app.recordInstall(path, asset)
     app.embedded[path] = readUpdateInfo(path)
-    if isIntegrated(path):
-      try: discard integrate(path)  # the icon may have changed
-      except OSError, IOError: discard
     let to =
       if asset.tag.isVersionTag: " to " & asset.tag
       elif asset.name.len > 0 and asset.name != name: " to " & asset.name
@@ -321,6 +318,10 @@ proc applyUpdate(app: AppState, path: string) =
     app.updates[path] = UpdateStatus(state: UpToDate, message: "Updated" & to)
     app.report(@[], "Updated " & name & to)
     app.refresh()
+    if isIntegrated(path):
+      # The icon may have changed. Extracting from the AppImage is slow, so
+      # it runs in a child process rather than freezing the window.
+      integrateAsync(path, proc(error: string) = discard)
 
   proc alreadyCurrent() =
     ## The "new" build turned out to be the one we have: nothing to swap.
