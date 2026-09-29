@@ -424,8 +424,26 @@ proc toggleMenuEntry(app: AppState, path: string) =
   except OSError, IOError:
     app.fail("Could not change the menu entry: " & getCurrentExceptionMsg())
 
+proc gtk_widget_get_next_sibling(widget: GtkWidget): GtkWidget {.importc, cdecl.}
+proc gtk_popover_get_type(): GType {.importc, cdecl.}
+proc g_type_check_instance_is_a(instance: pointer, typ: GType): cbool {.importc, cdecl.}
+
+proc closePopovers(widget: GtkWidget) =
+  var child = gtk_widget_get_first_child(widget)
+  while pointer(child) != nil:
+    if g_type_check_instance_is_a(pointer(child), gtk_popover_get_type()) != 0:
+      gtk_popover_popdown(child)
+    closePopovers(child)
+    child = gtk_widget_get_next_sibling(child)
+
+proc closePopovers(app: AppState) =
+  ## Call before opening a dialog from a popover: an open popover keeps its
+  ## input grab, so the first click on the dialog would only dismiss it.
+  closePopovers(app.unwrapInternalWidget())
+
 proc uninstall(app: AppState, path: string) =
   let name = path.extractFilename
+  app.closePopovers()
   let (res, _) = app.open: gui:
     MessageDialog:
       message = "Delete " & name & "?\n\nThis removes the file, its alias and its app menu entry."
@@ -841,6 +859,7 @@ method view(app: AppState): Widget =
                 Button {.expand: false.}:
                   text = "Add folder…"
                   proc clicked() =
+                    app.closePopovers()
                     let (res, state) = app.open: gui:
                       FileChooserDialog:
                         title = "Scan a folder for AppImages"
