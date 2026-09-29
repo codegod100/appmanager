@@ -13,6 +13,7 @@ const
   AppImageHubFeed* = "https://appimage.github.io/feed.json"
   PkgforgeList* = "https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/main/README.md"
   GitHubApi* = "https://api.github.com"
+  OrgPageSize* = 100
   CatalogMaxAge* = initDuration(days = 1)
   DesktopMarkerKey* = "X-AppManager-AppImage"
   DesktopVersionKey* = "X-AppManager-Version"
@@ -116,6 +117,16 @@ proc releasesUrl*(repo: string, tag = ""): string =
   of "", "latest-pre", "latest-all": GitHubApi & "/repos/" & repo & "/releases?per_page=20"
   of "latest": GitHubApi & "/repos/" & repo & "/releases/latest"
   else: GitHubApi & "/repos/" & repo & "/releases/tags/" & encodeQuery(tag)
+
+proc repoUrl*(repo: string): string =
+  GitHubApi & "/repos/" & repo
+
+proc orgReposUrl*(org: string, page: int): string =
+  ## One page (up to `OrgPageSize` repositories) of an organization's repos.
+  GitHubApi & "/orgs/" & org & "/repos?per_page=" & $OrgPageSize & "&page=" & $page
+
+proc descriptionsCachePath*(): string =
+  getCacheDir("appmanager") / "descriptions.json"
 
 proc isCatalog*(source: CatalogSource): bool =
   ## Whether `source` is a list we download whole and filter locally (as
@@ -228,6 +239,42 @@ proc parsePkgforge*(markdown: string): seq[CatalogApp] =
                  "Anylinux AppImage built by pkgforge-dev"
                else: "Publishes an Anylinux AppImage",
       repo: repo, categories: @["Anylinux"], stars: -1, source: FromPkgforge))
+
+proc parseRepoDescriptions*(node: JsonNode): Table[string, string] =
+  ## Reads `full_name` -> `description` (keyed in lower case) from a GitHub
+  ## repository object or a list of them.
+  proc add(t: var Table[string, string], item: JsonNode) =
+    let repo = item{"full_name"}.getStr
+    if repo.len > 0:
+      t[repo.toLowerAscii] = plainText(item{"description"}.getStr).strip
+  if node == nil: return
+  if node.kind == JArray:
+    for item in node: result.add(item)
+  elif node.kind == JObject:
+    result.add(node)
+
+proc applyDescriptions*(apps: var seq[CatalogApp], descriptions: Table[string, string]) =
+  ## Replaces summaries with the repositories' own GitHub descriptions.
+  for a in apps.mitems:
+    let d = descriptions.getOrDefault(a.repo.toLowerAscii)
+    if d.len > 0: a.summary = d
+
+proc enrichPkgforge*(apps: var seq[CatalogApp], described: seq[CatalogApp]) =
+  ## The pkgforge-dev README lists names only, so entries carry a generic
+  ## placeholder summary. Borrows the real description from a described
+  ## catalog entry with the same name or repo.
+  var byKey = initTable[string, string]()
+  proc key(s: string): string = s.toLowerAscii.multiReplace(("-", ""), ("_", ""), (" ", ""))
+  for d in described:
+    if d.summary.len == 0: continue
+    for k in [key(d.name), key(d.repo)]:
+      if k notin byKey: byKey[k] = d.summary
+  for a in apps.mitems:
+    if a.source != FromPkgforge or not a.summary.contains("Anylinux AppImage"): continue
+    for k in [key(a.name), key(a.repo)]:
+      if k in byKey:
+        a.summary = byKey[k]
+        break
 
 proc parseCatalog*(source: CatalogSource, data: string): seq[CatalogApp] =
   ## Parses a downloaded catalog. Raises on malformed JSON.

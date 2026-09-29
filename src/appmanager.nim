@@ -41,6 +41,8 @@ viewable App:
   page: Page
   catalogs: array[CatalogSource, seq[CatalogApp]] ## Downloaded catalogs
   catalogLoading: set[CatalogSource]
+  descriptions: Table[string, string] ## lower-case repo -> GitHub description
+  describing: bool                ## Fetching descriptions for the pkgforge-dev list
   catalogResults: seq[CatalogApp] ## Matches in the selected catalog
   githubResults: seq[CatalogApp]
   githubSearches: int             ## Discards replies to outdated searches
@@ -547,7 +549,12 @@ proc moveToCentral(app: AppState, paths: seq[string]) =
 
 proc refreshCatalog(app: AppState) =
   if app.source.isCatalog:
+    if app.source == FromPkgforge:
+      app.catalogs[FromPkgforge].applyDescriptions(app.descriptions)
+      app.catalogs[FromPkgforge].enrichPkgforge(app.catalogs[FromAppImageHub])
     app.catalogResults = searchCatalog(app.catalogs[app.source], app.query, int.high)
+
+proc loadDescriptions(app: AppState)
 
 proc loadCatalog(app: AppState, source: CatalogSource, force = false) =
   ## Loads a catalog from its daily cache, downloading it when the cache is
@@ -560,6 +567,7 @@ proc loadCatalog(app: AppState, source: CatalogSource, force = false) =
       if apps.len == 0: return false
       app.catalogs[source] = apps
       app.refreshCatalog()
+      if source == FromPkgforge: app.loadDescriptions()
       true
     except CatchableError:
       false
@@ -579,6 +587,63 @@ proc loadCatalog(app: AppState, source: CatalogSource, force = false) =
       app.searchError = "Could not load the " & $source & " catalog" &
         (if error.len > 0: ": " & error else: "")
     app.refresh())
+
+proc saveDescriptions(app: AppState) =
+  var obj = newJObject()
+  for repo, d in app.descriptions: obj[repo] = %d
+  try:
+    createDir(descriptionsCachePath().parentDir)
+    writeFile(descriptionsCachePath(), $obj)
+  except OSError, IOError:
+    discard
+
+proc loadDescriptions(app: AppState) =
+  ## The pkgforge-dev README has names only, so fetch each repository's GitHub
+  ## description: the organization's repos in bulk, then the few listed
+  ## projects that live elsewhere one by one. Cached for a day.
+  if app.describing or app.catalogs[FromPkgforge].len == 0: return
+  if catalogIsFresh(descriptionsCachePath()):
+    try:
+      for repo, d in parseJson(readFile(descriptionsCachePath())):
+        app.descriptions[repo] = d.getStr
+      app.refreshCatalog()
+      return
+    except CatchableError:
+      discard
+  app.describing = true
+  var missing: seq[string]
+  proc finish() =
+    app.describing = false
+    app.saveDescriptions()
+    app.refreshCatalog()
+    app.refresh()
+  proc fetchMissing() =
+    if missing.len == 0:
+      finish()
+      return
+    let repo = missing.pop()
+    fetchJson(repoUrl(repo), proc(node: JsonNode, error: string) =
+      if error.len == 0:
+        for k, v in parseRepoDescriptions(node): app.descriptions[k] = v
+      app.refreshCatalog()
+      app.refresh()
+      fetchMissing())
+  proc fetchPage(page: int) =
+    fetchJson(orgReposUrl("pkgforge-dev", page), proc(node: JsonNode, error: string) =
+      if error.len == 0:
+        for k, v in parseRepoDescriptions(node): app.descriptions[k] = v
+        if node.kind == JArray and node.len >= OrgPageSize and page < 20:
+          app.refreshCatalog()
+          app.refresh()
+          fetchPage(page + 1)
+          return
+      for a in app.catalogs[FromPkgforge]:
+        let key = a.repo.toLowerAscii
+        # Whatever the organization's listing lacks is archived or private.
+        if key notin app.descriptions and not key.startsWith("pkgforge-dev/"):
+          missing.add(a.repo)
+      fetchMissing())
+  fetchPage(1)
 
 proc searchGitHub(app: AppState) =
   let q = app.query.strip
@@ -706,6 +771,8 @@ proc selectSource(app: AppState, source: CatalogSource) =
   if source.isCatalog:
     app.refreshCatalog()
     if app.catalogs[source].len == 0: app.loadCatalog(source)
+    if source == FromPkgforge and app.catalogs[FromAppImageHub].len == 0:
+      app.loadCatalog(FromAppImageHub)  # supplies the descriptions
   elif app.query.strip.len > 0:
     app.searchGitHub()
 

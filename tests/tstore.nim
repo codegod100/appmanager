@@ -134,6 +134,22 @@ Intro with a [link](https://github.com/pkgforge-dev/sharun) inline.
     check catalogCachePath(FromPkgforge) != catalogCachePath(FromAppImageHub)
     check FromPkgforge.isCatalog and not FromGitHub.isCatalog
 
+    var enriched = apps
+    enriched.enrichPkgforge(@[CatalogApp(name: "Android_Tools", summary: "ADB and fastboot",
+                                         repo: "x/android-tools", source: FromAppImageHub)])
+    check enriched[1].summary == "ADB and fastboot"
+    check enriched[0].summary == apps[0].summary
+
+    let descs = parseRepoDescriptions(parseJson("""[
+      {"full_name": "pkgforge-dev/86box-AppImage-Enhanced", "description": "86Box <b>emulator</b>"},
+      {"full_name": "a/none", "description": null}]"""))
+    check descs["pkgforge-dev/86box-appimage-enhanced"] == "86Box emulator"
+    check parseRepoDescriptions(parseJson("""{"full_name": "A/B", "description": "x"}""")).len == 1
+    var described = apps
+    described.applyDescriptions(descs)
+    check described[0].summary == "86Box emulator"
+    check described[1].summary == apps[1].summary
+
   test "cleans up catalog text":
     check plainText("<p>Audio &amp; video</p>\n<ul>\n  <li>Cut</li></ul>") ==
       "Audio & video Cut"
