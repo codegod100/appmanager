@@ -10,7 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 
-import '../ui/kit.dart';
+import 'package:flatkit/flatkit.dart';
 
 import 'controller.dart';
 import 'core.dart';

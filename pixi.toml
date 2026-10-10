@@ -1,0 +1,12 @@
+# pixi supplies flatkit, appmanager's widget kit
+# (https://github.com/codegod100/flutterkit). Flutter itself isn't on
+# conda-forge, so install the Flutter SDK separately. `pixi update flatkit`
+# moves to the kit's latest commit.
+[workspace]
+name = "appmanager"
+channels = ["conda-forge"]
+platforms = ["linux-64", "linux-aarch64"]
+preview = ["pixi-build"]
+
+[dependencies]
+flatkit = { git = "https://github.com/codegod100/flutterkit", branch = "main" }

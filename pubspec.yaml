@@ -11,6 +11,9 @@ dependencies:
     sdk: flutter
   crypto: ^3.0.3
   file_selector: ^1.0.3
+  # Installed by `pixi install` (see pixi.toml).
+  flatkit:
+    path: .pixi/envs/default/share/flatkit
   path: ^1.9.0
 
 dev_dependencies:

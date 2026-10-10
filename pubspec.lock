@@ -129,6 +129,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.9.3+6"
+  flatkit:
+    dependency: "direct main"
+    description:
+      path: ".pixi/envs/default/share/flatkit"
+      relative: true
+    source: path
+    version: "0.1.0"
   flutter:
     dependency: "direct main"
     description: flutter

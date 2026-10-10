@@ -128,10 +128,12 @@ Aliases, scan folders and update sources are stored in
 ## Building
 
 You need the [Flutter SDK](https://docs.flutter.dev/get-started/install/linux)
-(stable channel) and its Linux desktop dependencies: `clang cmake ninja-build
+(stable channel), [pixi](https://pixi.sh) for the widget kit
+([flatkit](https://github.com/codegod100/flutterkit)), and Flutter's Linux desktop dependencies: `clang cmake ninja-build
 pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev` on Debian/Ubuntu.
 
 ```sh
+pixi install                 # fetches flatkit, the widget kit
 flutter pub get
 flutter test                 # core and store tests (no GTK or network needed)
 flutter build linux --release

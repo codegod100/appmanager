@@ -10,7 +10,7 @@ import 'package:flutter/services.dart';
 import 'src/controller.dart';
 import 'src/core.dart';
 import 'src/ui.dart';
-import 'ui/kit.dart';
+import 'package:flatkit/flatkit.dart';
 
 void main(List<String> args) {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,7 +34,7 @@ class AppManagerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Material stays only as the host for text fields and the navigator;
-    // everything visible comes from the kit in lib/ui.
+    // everything visible comes from flatkit.
     return MaterialApp(
       title: 'AppImage Manager',
       debugShowCheckedModeBanner: false,
