@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build appmanager-<version>-<arch>.AppImage (plus a .zsync for delta updates).
+# Build appmanager-<version>-<arch>.AppImage (plus a .zsync for delta updates)
+# from the Flutter Linux bundle.
 #
 # Usage: packaging/build-appimage.sh [version]
 #
@@ -8,6 +9,7 @@
 #   UPDATE_INFORMATION   embedded update info; defaults to this repo's GitHub
 #                        releases so AppImageUpdate & co. can self-update.
 #   GITHUB_REPOSITORY    owner/repo used for the default update info
+#   REBUILD              set to rebuild the Flutter bundle even if one exists
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -15,61 +17,62 @@ ROOT=$PWD
 APP=appmanager
 APP_ID=dev.appmanager.AppManager
 ARCH=${ARCH:-$(uname -m)}
-VERSION=${1:-$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$APP.nimble")}
+VERSION=${1:-$(sed -n 's/^version: *\([^+]*\).*/\1/p' pubspec.yaml)}
 REPO=${GITHUB_REPOSITORY:-codegod100/appmanager}
 BUILD=$ROOT/build/appimage
 TOOLS=$BUILD/tools
 APPDIR=$BUILD/AppDir
-
-export UPDATE_INFORMATION=${UPDATE_INFORMATION:-"gh-releases-zsync|${REPO%%/*}|${REPO##*/}|release|$APP-*-$ARCH.AppImage.zsync"}
-export LDAI_UPDATE_INFORMATION=$UPDATE_INFORMATION
-export LDAI_OUTPUT=$APP-$VERSION-$ARCH.AppImage
-export OUTPUT=$LDAI_OUTPUT
-export LINUXDEPLOY_OUTPUT_VERSION=$VERSION
-export DEPLOY_GTK_VERSION=4
-# linuxdeploy is itself an AppImage; don't require FUSE in containers/CI.
+case "$ARCH" in
+  x86_64) FLUTTER_ARCH=x64 ;;
+  aarch64) FLUTTER_ARCH=arm64 ;;
+  *) echo "unsupported arch $ARCH" >&2; exit 1 ;;
+esac
+BUNDLE=$ROOT/build/linux/$FLUTTER_ARCH/release/bundle
+OUTPUT=$APP-$VERSION-$ARCH.AppImage
+UPDATE_INFORMATION=${UPDATE_INFORMATION:-"gh-releases-zsync|${REPO%%/*}|${REPO##*/}|release|$APP-*-$ARCH.AppImage.zsync"}
+# appimagetool is itself an AppImage; don't require FUSE in containers/CI.
 export APPIMAGE_EXTRACT_AND_RUN=1
 
-rm -rf "$APPDIR" && mkdir -p "$TOOLS"
-
-fetch() { # url dest
-  [ -x "$2" ] || { curl -fsSL -o "$2" "$1" && chmod +x "$2"; }
-}
-fetch "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$ARCH.AppImage" "$TOOLS/linuxdeploy"
-fetch "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-$ARCH.AppImage" "$TOOLS/linuxdeploy-plugin-appimage"
-fetch "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh" "$TOOLS/linuxdeploy-plugin-gtk.sh"
-export PATH=$TOOLS:$PATH
-
-if [ ! -x "$APP" ] || [ -n "${REBUILD:-}" ]; then
-  nimble build -y -d:release --opt:speed
+mkdir -p "$TOOLS"
+if [ ! -x "$TOOLS/appimagetool" ]; then
+  curl -fsSL -o "$TOOLS/appimagetool" \
+    "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
+  chmod +x "$TOOLS/appimagetool"
 fi
 
-mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
-cp data/icons/hicolor/scalable/apps/$APP_ID.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/"
+if [ ! -x "$BUNDLE/$APP" ] || [ -n "${REBUILD:-}" ]; then
+  flutter build linux --release
+fi
+
+# The Flutter bundle (binary, lib/, data/) goes into usr/bin as is: the
+# binary finds its libraries through its $ORIGIN/lib RPATH. GTK 3 comes from
+# the system, as it does for other Flutter apps.
+rm -rf "$APPDIR"
+mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" \
+  "$APPDIR/usr/share/icons/hicolor/scalable/apps" "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+cp -a "$BUNDLE/." "$APPDIR/usr/bin/"
+cp "data/$APP_ID.desktop" "$APPDIR/usr/share/applications/"
+cp "data/$APP_ID.desktop" "$APPDIR/"
+cp "data/icons/hicolor/scalable/apps/$APP_ID.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/"
+cp "data/icons/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/"
+cp "data/icons/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
+ln -sf "$APP_ID.png" "$APPDIR/.DirIcon"
+cat > "$APPDIR/AppRun" <<'EOF'
+#!/bin/sh
+HERE=$(dirname "$(readlink -f "$0")")
+# Lets a running appmanager find its own icon when it isn't installed.
+export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+exec "$HERE/usr/bin/appmanager" "$@"
+EOF
+chmod +x "$APPDIR/AppRun"
 
 cd "$BUILD"
-rm -f "$LDAI_OUTPUT" "$LDAI_OUTPUT.zsync"
-
-# linuxdeploy-plugin-gtk's own AppRun hook (apprun-hooks/linuxdeploy-plugin-gtk.sh)
-# forces GTK_THEME=Adwaita:<light|dark> based on a 1s D-Bus portal probe that
-# falls back to GNOME's gsettings on failure. That pinned theme overrides
-# GTK4's own native portal-based dark-mode detection, which is what makes the
-# source build follow the desktop color scheme. Hooks run in filename-sort
-# order, so this one (sorting after "linuxdeploy-plugin-gtk.sh") undoes the
-# override and lets GTK4 detect the color scheme itself again.
-mkdir -p "$APPDIR/apprun-hooks"
-cat > "$APPDIR/apprun-hooks/zz-follow-system-theme.sh" <<'EOF'
-unset GTK_THEME
-EOF
-
-linuxdeploy \
-  --appdir "$APPDIR" \
-  --executable "$ROOT/$APP" \
-  --desktop-file "$ROOT/data/$APP_ID.desktop" \
-  --icon-file "$ROOT/data/icons/hicolor/256x256/apps/$APP_ID.png" \
-  --plugin gtk \
-  --output appimage
+rm -f "$OUTPUT" "$OUTPUT.zsync"
+# -u embeds the update information and, with zsyncmake installed, writes
+# the matching .zsync file.
+ARCH=$ARCH "$TOOLS/appimagetool" --no-appstream -u "$UPDATE_INFORMATION" "$APPDIR" "$OUTPUT"
 
 mkdir -p "$ROOT/dist"
-mv -f "$LDAI_OUTPUT" "$LDAI_OUTPUT.zsync" "$ROOT/dist/"
-echo "Built dist/$LDAI_OUTPUT (update info: $UPDATE_INFORMATION)"
+mv -f "$OUTPUT" "$ROOT/dist/"
+[ -f "$OUTPUT.zsync" ] && mv -f "$OUTPUT.zsync" "$ROOT/dist/"
+echo "Built dist/$OUTPUT (update info: $UPDATE_INFORMATION)"

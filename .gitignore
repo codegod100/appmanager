@@ -1,6 +1,10 @@
-/appmanager
-/tests/tcore
-nimcache/
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
 build/
 dist/
-/tests/tstore
+*.iml
+.idea/
+linux/flutter/ephemeral/

@@ -1,6 +1,6 @@
 # appmanager
 
-A small GTK4 GUI written in Nim ([owlkettle](https://github.com/can-lehmann/owlkettle))
+A small Linux desktop app written in [Flutter](https://flutter.dev)
 that finds the AppImages you have installed, lets you give each one a short
 command-line alias, and puts those aliases on your `PATH`. It can also search
 AppImageHub and GitHub for new AppImages, install them, keep them updated and
@@ -115,24 +115,37 @@ choices: **Run** starts it, and **Install** moves it to `~/Applications`,
 adds it to your application menu and gives it an alias. If appmanager is
 already running, the file opens in that window.
 
-Downloads use `curl`, and hashes use `sha1sum` from your system. GitHub
-allows 60 unauthenticated API requests an hour. If you check many apps,
-export `GITHUB_TOKEN` to raise that limit. appmanager passes the token to
-curl in a private config file, not on the command line.
+Downloads and SHA-1 hashing happen inside appmanager (no `curl` needed), and
+`http_proxy`/`https_proxy` are honoured. GitHub allows 60 unauthenticated API
+requests an hour. If you check many apps, export `GITHUB_TOKEN` (a GitHub
+personal access token; no scopes are needed for public repositories) to
+raise that limit. appmanager sends it only to `api.github.com`, as an
+`Authorization: Bearer` header.
 
 Aliases, scan folders and update sources are stored in
 `~/.config/appmanager/config.json`.
 
 ## Building
 
-You need Nim ≥ 2.0 and the GTK 4 development files (`libgtk-4-dev` on
-Debian/Ubuntu, `gtk4-devel` on Fedora, `gtk4` on Arch).
+You need the [Flutter SDK](https://docs.flutter.dev/get-started/install/linux)
+(stable channel) and its Linux desktop dependencies: `clang cmake ninja-build
+pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev` on Debian/Ubuntu.
 
 ```sh
-nimble build      # produces ./appmanager
-nimble test       # runs the core and store tests (no GTK or network needed)
-./appmanager
+flutter pub get
+flutter test                 # core and store tests (no GTK or network needed)
+flutter build linux --release
+build/linux/x64/release/bundle/appmanager
 ```
+
+Or run it straight from the checkout with `flutter run -d linux`.
+
+The code lives in `lib/src/`: `core.dart` (config, discovery, aliases, shims,
+PATH), `store.dart` (catalogs, release picking, update information, zsync,
+menu entries, file associations), `net.dart` (downloads and hashing),
+`controller.dart` (app state and actions) and `ui.dart` (the window). The GTK
+runner in `linux/runner/` makes the app single-instance and hands AppImages
+opened from the file manager to the running window.
 
 ## AppImage
 
@@ -152,7 +165,9 @@ This lets [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate),
 Gear Lever, AppImageLauncher and similar tools update it in place. They only
 download the blocks that changed.
 
-To build one locally (needs `zsync` for the `.zsync` file):
+The AppImage contains the Flutter bundle and uses the system's GTK 3, which
+every Linux desktop ships. To build one locally (needs `zsync` for the
+`.zsync` file):
 
 ```sh
 packaging/build-appimage.sh          # -> dist/appmanager-<version>-x86_64.AppImage

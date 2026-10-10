@@ -21,10 +21,10 @@ concurrency:
 
 jobs:
   appimage:
-    # The AppImage bundles this runner's GTK. 22.04's GTK 4.6 makes the window
-    # stop accepting clicks during an update (system GTK 4.22 doesn't), so
-    # build on 24.04 (GTK 4.14). That raises the minimum to glibc >= 2.39.
-    runs-on: ubuntu-24.04
+    # Flutter's Linux embedder uses GTK 3, which every desktop ships, so the
+    # AppImage uses the system's. Building on 22.04 keeps the minimum glibc
+    # at 2.35.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -32,20 +32,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgtk-4-dev librsvg2-common zsync file desktop-file-utils
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+            libstdc++-12-dev zsync file desktop-file-utils
 
-      - uses: jiro4989/setup-nim-action@v2
+      - uses: subosito/flutter-action@v2
         with:
-          nim-version: '2.2.x'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          channel: stable
+          cache: true
 
       - name: Test
-        run: nimble test -y
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
 
       - name: Work out version
         id: version
         run: |
-          base=$(sed -n 's/^version *= *"\(.*\)"/\1/p' appmanager.nimble)
+          base=$(sed -n 's/^version: *\([^+]*\).*/\1/p' pubspec.yaml)
           if [[ "$GITHUB_EVENT_NAME" == push || "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             version=$base.$GITHUB_RUN_NUMBER
           else
