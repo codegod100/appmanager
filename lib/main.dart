@@ -34,28 +34,22 @@ class AppManagerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Material stays only as the host for text fields and the navigator;
-    // everything visible comes from flatkit.
-    return MaterialApp(
-      title: 'AppImage Manager',
-      debugShowCheckedModeBanner: false,
-      theme: KitTheme.material(KitColors.light),
-      darkTheme: KitTheme.material(KitColors.dark),
-      builder: (context, child) {
-        final colors = MediaQuery.platformBrightnessOf(context) == Brightness.dark
-            ? KitColors.dark
-            : KitColors.light;
-        return KitTheme(
-          colors: colors,
-          child: Material(
-            color: colors.background,
-            child: DefaultTextStyle(
-              style: TextStyle(color: colors.text, fontSize: 14, height: 1.3),
-              child: child!,
-            ),
+    // everything visible comes from flatkit. KitSystemTheme follows the KDE
+    // colour scheme on Plasma and the light/dark setting elsewhere.
+    return KitSystemTheme(
+      builder: (context, colors) => MaterialApp(
+        title: 'AppImage Manager',
+        debugShowCheckedModeBanner: false,
+        theme: KitTheme.material(colors),
+        builder: (context, child) => Material(
+          color: colors.background,
+          child: DefaultTextStyle(
+            style: TextStyle(color: colors.text, fontSize: 14, height: 1.3),
+            child: child!,
           ),
-        );
-      },
-      home: HomePage(app),
+        ),
+        home: HomePage(app),
+      ),
     );
   }
 }
