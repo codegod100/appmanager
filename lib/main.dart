@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'src/controller.dart';
 import 'src/core.dart';
 import 'src/ui.dart';
+import 'ui/kit.dart';
 
 void main(List<String> args) {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,15 +33,28 @@ class AppManagerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    ThemeData theme(Brightness b) => ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF3584E4), brightness: b),
-          visualDensity: VisualDensity.compact,
-        );
+    // Material stays only as the host for text fields and the navigator;
+    // everything visible comes from the kit in lib/ui.
     return MaterialApp(
       title: 'AppImage Manager',
       debugShowCheckedModeBanner: false,
-      theme: theme(Brightness.light),
-      darkTheme: theme(Brightness.dark),
+      theme: KitTheme.material(KitColors.light),
+      darkTheme: KitTheme.material(KitColors.dark),
+      builder: (context, child) {
+        final colors = MediaQuery.platformBrightnessOf(context) == Brightness.dark
+            ? KitColors.dark
+            : KitColors.light;
+        return KitTheme(
+          colors: colors,
+          child: Material(
+            color: colors.background,
+            child: DefaultTextStyle(
+              style: TextStyle(color: colors.text, fontSize: 14, height: 1.3),
+              child: child!,
+            ),
+          ),
+        );
+      },
       home: HomePage(app),
     );
   }

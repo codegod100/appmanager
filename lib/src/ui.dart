@@ -5,9 +5,12 @@ library;
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' show Icons, SelectableText;
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
+
+import '../ui/kit.dart';
 
 import 'controller.dart';
 import 'core.dart';
@@ -26,68 +29,82 @@ class HomePage extends StatelessWidget {
         final installed = app.page == AppPage.installed;
         final available =
             app.apps.where((a) => app.statusOf(a.path).state == UpdateState.updateAvailable).length;
-        return Scaffold(
-          appBar: AppBar(
-            leading: IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: installed
-                  ? 'Rescan for AppImages'
-                  : app.source.isCatalog
-                      ? 'Reload the ${app.source} catalog'
-                      : 'Search GitHub again',
-              onPressed: app.reload,
-            ),
-            centerTitle: true,
-            title: SegmentedButton<AppPage>(
-              segments: const [
-                ButtonSegment(value: AppPage.installed, label: Text('Installed')),
-                ButtonSegment(value: AppPage.browse, label: Text('Browse')),
-              ],
-              selected: {app.page},
-              showSelectedIcon: false,
-              onSelectionChanged: (s) => app.switchTo(s.first),
-            ),
-            actions: [
-              if (installed && available > 1)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: FilledButton(
-                    onPressed: app.updateAll,
-                    child: Text('Update all ($available)'),
+        final c = KitTheme.of(context);
+        return ColoredBox(
+          color: c.background,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                decoration: BoxDecoration(
+                  color: c.surface,
+                  border: Border(bottom: BorderSide(color: c.border)),
+                ),
+                child: Row(children: [
+                  Expanded(
+                    child: Row(children: [
+                      KitIconButton(
+                        Icons.refresh,
+                        tooltip: installed
+                            ? 'Rescan for AppImages'
+                            : app.source.isCatalog
+                                ? 'Reload the ${app.source} catalog'
+                                : 'Search GitHub again',
+                        onPressed: app.reload,
+                      ),
+                    ]),
+                  ),
+                  KitSegmented<AppPage>(
+                    segments: const [
+                      (AppPage.installed, 'Installed'),
+                      (AppPage.browse, 'Browse'),
+                    ],
+                    selected: app.page,
+                    onChanged: app.switchTo,
+                  ),
+                  Expanded(
+                    child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                      if (installed && available > 1) ...[
+                        KitButton.primary('Update all ($available)', onPressed: app.updateAll),
+                        const SizedBox(width: 6),
+                      ],
+                      if (installed) ...[
+                        KitButton(
+                          'Check for updates',
+                          tooltip: 'Check all AppImages for updates',
+                          onPressed: app.checking ? null : app.checkAll,
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      KitIconButton(
+                        Icons.folder_outlined,
+                        tooltip: 'Folders to scan',
+                        onPressed: () =>
+                            showKitDialog<void>(context, (_) => _ScanFoldersDialog(app)),
+                      ),
+                      KitIconButton(
+                        Icons.menu,
+                        tooltip: 'Opening AppImages',
+                        onPressed: () => showKitDialog<void>(context, (_) => _HandlerDialog(app)),
+                      ),
+                    ]),
+                  ),
+                ]),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: installed ? _InstalledPage(app) : _BrowsePage(app)),
+                      if (app.status.isNotEmpty) _StatusBar(app),
+                    ],
                   ),
                 ),
-              if (installed)
-                Tooltip(
-                  message: 'Check all AppImages for updates',
-                  child: OutlinedButton(
-                    onPressed: app.checking ? null : app.checkAll,
-                    child: const Text('Check for updates'),
-                  ),
-                ),
-              IconButton(
-                icon: const Icon(Icons.folder_outlined),
-                tooltip: 'Folders to scan',
-                onPressed: () => showDialog<void>(
-                    context: context, builder: (_) => _ScanFoldersDialog(app)),
               ),
-              IconButton(
-                icon: const Icon(Icons.menu),
-                tooltip: 'Opening AppImages',
-                onPressed: () => showDialog<void>(
-                    context: context, builder: (_) => _HandlerDialog(app)),
-              ),
-              const SizedBox(width: 4),
             ],
-          ),
-          body: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: installed ? _InstalledPage(app) : _BrowsePage(app)),
-                if (app.status.isNotEmpty) _StatusBar(app),
-              ],
-            ),
           ),
         );
       },
@@ -95,12 +112,9 @@ class HomePage extends StatelessWidget {
   }
 }
 
-TextStyle? _dim(BuildContext context, {bool small = false}) =>
-    (small ? Theme.of(context).textTheme.bodySmall : Theme.of(context).textTheme.bodyMedium)
-        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant);
+TextStyle _dim(BuildContext context, {bool small = false}) => KitText.dim(context, small: small);
 
-TextStyle? _heading(BuildContext context) =>
-    Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold);
+TextStyle _heading(BuildContext context) => KitText.heading(context);
 
 void _copy(AppController app, String text) {
   Clipboard.setData(ClipboardData(text: text));
@@ -113,20 +127,15 @@ class _StatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final color = app.statusIsError ? scheme.error : Colors.green.shade600;
+    final c = KitTheme.of(context);
+    final color = app.statusIsError ? c.danger : c.success;
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(child: SelectableText(app.status, style: TextStyle(color: color))),
-          IconButton(
-            icon: const Icon(Icons.close, size: 16),
-            tooltip: 'Dismiss',
-            visualDensity: VisualDensity.compact,
-            onPressed: app.dismissStatus,
-          ),
+          KitIconButton(Icons.close, size: 16, tooltip: 'Dismiss', onPressed: app.dismissStatus),
         ],
       ),
     );
@@ -144,8 +153,8 @@ class _ScanFoldersDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: app,
-      builder: (context, _) => AlertDialog(
-        title: const Text('Folders scanned for AppImages'),
+      builder: (context, _) => KitDialog(
+        title: 'Folders scanned for AppImages',
         content: SizedBox(
           width: 420,
           child: Column(
@@ -154,8 +163,8 @@ class _ScanFoldersDialog extends StatelessWidget {
               for (final (i, dir) in app.cfg.scanDirs.indexed)
                 Row(children: [
                   Expanded(child: Text(tildify(dir), overflow: TextOverflow.ellipsis)),
-                  IconButton(
-                    icon: const Icon(Icons.remove_circle_outline),
+                  KitIconButton(
+                    Icons.remove_circle_outline,
                     tooltip: 'Stop scanning this folder',
                     onPressed: () => app.removeScanDir(i),
                   ),
@@ -164,14 +173,14 @@ class _ScanFoldersDialog extends StatelessWidget {
           ),
         ),
         actions: [
-          TextButton(
+          KitButton(
+            'Add folder…',
             onPressed: () async {
               final dir = await getDirectoryPath(confirmButtonText: 'Add');
               if (dir != null) app.addScanDir(dir);
             },
-            child: const Text('Add folder…'),
           ),
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+          KitButton('Close', onPressed: () => Navigator.pop(context)),
         ],
       ),
     );
@@ -186,18 +195,17 @@ class _HandlerDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: app,
-      builder: (context, _) => AlertDialog(
-        title: const Text('Opening AppImages'),
-        content: SizedBox(width: 380, child: Text(app.handlerText())),
+      builder: (context, _) => KitDialog(
+        title: 'Opening AppImages',
+        width: 380,
+        content: Text(app.handlerText()),
         actions: [
-          Tooltip(
-            message: 'Make AppManager the default app for AppImage files',
-            child: FilledButton(
-              onPressed: app.handler == '$appId.desktop' ? null : app.makeDefaultHandler,
-              child: const Text('Open AppImages with AppManager'),
-            ),
+          KitButton.primary(
+            'Open AppImages with AppManager',
+            tooltip: 'Make AppManager the default app for AppImage files',
+            onPressed: app.handler == '$appId.desktop' ? null : app.makeDefaultHandler,
           ),
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+          KitButton('Close', onPressed: () => Navigator.pop(context)),
         ],
       ),
     );
@@ -220,36 +228,35 @@ class _InstalledPage extends StatelessWidget {
       children: [
         Row(children: [
           Expanded(child: Text(app.pathHint(), style: _dim(context))),
-          IconButton(
-            icon: const Icon(Icons.copy, size: 18),
+          KitIconButton(
+            Icons.copy,
+            size: 16,
             tooltip: 'Copy folder path',
             onPressed: () => _copy(app, app.cfg.binDir),
           ),
         ]),
         for (final path in app.opened) _OpenedCard(app, path),
         if (strays.isNotEmpty)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Row(children: [
-                Expanded(
-                  child: Tooltip(
-                    message: strays.map(tildify).join('\n'),
-                    child: Text(
-                        '${strays.length == 1 ? '${p.basename(strays[0])} is' : '${strays.length} AppImages are'}'
-                        ' outside $central. Move ${strays.length == 1 ? 'it' : 'them'} there to keep '
-                        'your AppImages in one place? Aliases, update sources and menu entries move along.'),
-                  ),
+          KitPanel(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(8),
+            child: Row(children: [
+              Expanded(
+                child: KitTooltip(
+                  message: strays.map(tildify).join('\n'),
+                  child: Text(
+                      '${strays.length == 1 ? '${p.basename(strays[0])} is' : '${strays.length} AppImages are'}'
+                      ' outside $central. Move ${strays.length == 1 ? 'it' : 'them'} there to keep '
+                      'your AppImages in one place? Aliases, update sources and menu entries move along.'),
                 ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: () => app.moveToCentral(strays),
-                  child: Text(strays.length == 1 ? 'Move' : 'Move all'),
-                ),
-                TextButton(onPressed: app.hideMoveOffer, child: const Text('Not now')),
-                TextButton(onPressed: app.neverOfferMove, child: const Text("Don't ask again")),
-              ]),
-            ),
+              ),
+              const SizedBox(width: 8),
+              KitButton.primary(strays.length == 1 ? 'Move' : 'Move all',
+                  onPressed: () => app.moveToCentral(strays)),
+              const SizedBox(width: 4),
+              KitButton.ghost('Not now', onPressed: app.hideMoveOffer),
+              KitButton.ghost("Don't ask again", onPressed: app.neverOfferMove),
+            ]),
           ),
         const SizedBox(height: 4),
         Expanded(
@@ -262,12 +269,10 @@ class _InstalledPage extends StatelessWidget {
                     style: _dim(context),
                   ),
                 )
-              : Card(
-                  clipBehavior: Clip.antiAlias,
-                  margin: EdgeInsets.zero,
+              : KitPanel(
                   child: ListView.separated(
                     itemCount: app.apps.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    separatorBuilder: (_, __) => const KitDivider(),
                     itemBuilder: (_, i) =>
                         _AppRow(app, app.apps[i], key: ValueKey(app.apps[i].path)),
                   ),
@@ -286,37 +291,31 @@ class _OpenedCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = p.basename(path);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Row(children: [
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Opened $name', style: _heading(context), overflow: TextOverflow.ellipsis),
-              Tooltip(
-                message: path,
-                child: Text(tildify(path),
-                    style: _dim(context, small: true), overflow: TextOverflow.ellipsis),
-              ),
-            ]),
-          ),
-          Tooltip(
-            message: 'Start $name',
-            child: OutlinedButton(onPressed: () => app.launch(path), child: const Text('Run')),
-          ),
-          const SizedBox(width: 6),
-          Tooltip(
-            message: '${needsMove(path) ? 'Move it to ${tildify(defaultInstallDir())}, ' : ''}'
-                'add it to the app menu and give it an alias',
-            child: FilledButton(onPressed: () => app.adopt(path), child: const Text('Install')),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close),
-            tooltip: 'Dismiss',
-            onPressed: () => app.dismissOpened(path),
-          ),
-        ]),
-      ),
+    return KitPanel(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Opened $name', style: _heading(context), overflow: TextOverflow.ellipsis),
+            KitTooltip(
+              message: path,
+              child: Text(tildify(path),
+                  style: _dim(context, small: true), overflow: TextOverflow.ellipsis),
+            ),
+          ]),
+        ),
+        KitButton('Run', tooltip: 'Start $name', onPressed: () => app.launch(path)),
+        const SizedBox(width: 6),
+        KitButton.primary(
+          'Install',
+          tooltip: '${needsMove(path) ? 'Move it to ${tildify(defaultInstallDir())}, ' : ''}'
+              'add it to the app menu and give it an alias',
+          onPressed: () => app.adopt(path),
+        ),
+        const SizedBox(width: 2),
+        KitIconButton(Icons.close, tooltip: 'Dismiss', onPressed: () => app.dismissOpened(path)),
+      ]),
     );
   }
 }
@@ -382,32 +381,32 @@ class _AppRowState extends State<_AppRow> {
   Future<void> _editSource() async {
     final embedded = parseUpdateInfo(app.embeddedInfo(path));
     final controller = TextEditingController(text: app.cfg.installFor(path).source);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Update source'),
+    final result = await showKitDialog<String>(
+      context,
+      (context) => KitDialog(
+        title: 'Update source',
         content: SizedBox(
           width: 420,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('A GitHub repository or .zsync URL to update from. Leave empty to use '
-                "the AppImage's built-in update information."),
-            const SizedBox(height: 8),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              decoration: InputDecoration(
-                hintText: embedded.kind != UpdateKind.none
-                    ? 'Built in: $embedded'
-                    : 'owner/repo or .zsync URL',
-              ),
-              onSubmitted: (v) => Navigator.pop(context, v),
-            ),
-          ]),
+          child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('A GitHub repository or .zsync URL to update from. Leave empty to use '
+                    "the AppImage's built-in update information."),
+                const SizedBox(height: 8),
+                KitTextField(
+                  controller: controller,
+                  autofocus: true,
+                  hint: embedded.kind != UpdateKind.none
+                      ? 'Built in: $embedded'
+                      : 'owner/repo or .zsync URL',
+                  onSubmitted: (v) => Navigator.pop(context, v),
+                ),
+              ]),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text), child: const Text('Save')),
+          KitButton('Cancel', onPressed: () => Navigator.pop(context)),
+          KitButton.primary('Save', onPressed: () => Navigator.pop(context, controller.text)),
         ],
       ),
     );
@@ -417,18 +416,14 @@ class _AppRowState extends State<_AppRow> {
 
   Future<void> _confirmDelete() async {
     final name = p.basename(path);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Delete $name?'),
+    final ok = await showKitDialog<bool>(
+      context,
+      (context) => KitDialog(
+        title: 'Delete $name?',
         content: const Text('This removes the file, its alias and its app menu entry.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
-          ),
+          KitButton('Cancel', autofocus: true, onPressed: () => Navigator.pop(context, false)),
+          KitButton.danger('Delete', onPressed: () => Navigator.pop(context, true)),
         ],
       ),
     );
@@ -437,7 +432,7 @@ class _AppRowState extends State<_AppRow> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final c = KitTheme.of(context);
     final saved = app.cfg.aliasFor(path);
     final eff = effective;
     final missing = !fileExists(path);
@@ -446,10 +441,10 @@ class _AppRowState extends State<_AppRow> {
     final updateText = app.updateLine(path);
     final busy = update.state == UpdateState.checking || update.state == UpdateState.updating;
     final updateColor = switch (update.state) {
-      UpdateState.checkFailed => scheme.error,
-      UpdateState.updateAvailable || UpdateState.updating => scheme.primary,
-      UpdateState.upToDate when update.message.isNotEmpty => Colors.green.shade600,
-      _ => scheme.onSurfaceVariant,
+      UpdateState.checkFailed => c.danger,
+      UpdateState.updateAvailable || UpdateState.updating => c.accent,
+      UpdateState.upToDate when update.message.isNotEmpty => c.success,
+      _ => c.textDim,
     };
 
     return Padding(
@@ -459,126 +454,98 @@ class _AppRowState extends State<_AppRow> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('${widget.appImage.name}${missing ? '  (missing)' : ''}',
                 style: _heading(context), overflow: TextOverflow.ellipsis),
-            Tooltip(
+            KitTooltip(
               message: path,
               child: Text(path, style: _dim(context, small: true), overflow: TextOverflow.ellipsis),
             ),
             if (updateText.isNotEmpty)
-              Tooltip(
+              KitTooltip(
                 message: updateText,
                 child: Text(updateText,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: updateColor)),
+                    style: KitText.small(context, color: updateColor)),
               ),
           ]),
         ),
-        IconButton(
-          icon: const Icon(Icons.copy, size: 18),
+        KitIconButton(
+          Icons.copy,
+          size: 16,
           tooltip: 'Copy AppImage path',
           onPressed: () => _copy(app, path),
         ),
+        const SizedBox(width: 4),
         SizedBox(
           width: 170,
-          child: Tooltip(
+          child: KitTooltip(
             message: valid
                 ? 'Command used to launch this AppImage (Enter to save)'
                 : "Use letters, digits, '-', '_', '.' or '+'",
-            child: TextField(
+            child: KitTextField(
               controller: _alias,
-              decoration: InputDecoration(
-                isDense: true,
-                border: const OutlineInputBorder(),
-                hintText: suggestAlias(p.basename(path)),
-                errorText: valid ? null : '',
-                errorStyle: const TextStyle(height: 0, fontSize: 0),
-              ),
+              hint: suggestAlias(p.basename(path)),
+              error: !valid,
               onChanged: (_) => setState(() => _edited = true),
               onSubmitted: (_) => _save(effective),
             ),
           ),
         ),
-        IconButton(
-          icon: const Icon(Icons.check),
+        const SizedBox(width: 2),
+        KitIconButton(
+          Icons.check,
           tooltip: 'Save alias',
-          color: scheme.primary,
+          color: c.accent,
           onPressed: valid && eff != saved ? () => _save(eff) : null,
         ),
-        IconButton(
-          icon: const Icon(Icons.backspace_outlined),
+        KitIconButton(
+          Icons.backspace_outlined,
+          size: 16,
           tooltip: 'Remove alias',
           onPressed: saved.isNotEmpty ? () => _save('') : null,
         ),
         if (update.state == UpdateState.checking ||
-            (update.state == UpdateState.updating &&
-                (update.verifying || update.asset.size <= 0)))
-          Tooltip(
+            (update.state == UpdateState.updating && (update.verifying || update.asset.size <= 0)))
+          KitTooltip(
             message: updateText,
             child: const Padding(
               padding: EdgeInsets.symmetric(horizontal: 8),
-              child: SizedBox(
-                  width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+              child: KitSpinner(size: 18),
             ),
           )
         else if (update.state == UpdateState.updating)
-          Tooltip(
+          KitTooltip(
             message: updateText,
             child: SizedBox(
               width: 90,
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                LinearProgressIndicator(value: update.progress),
-                Text('${(update.progress * 100).toInt()}%',
-                    style: Theme.of(context).textTheme.bodySmall),
+                KitProgressBar(value: update.progress),
+                const SizedBox(height: 2),
+                Text('${(update.progress * 100).toInt()}%', style: KitText.small(context)),
               ]),
             ),
           )
         else if (update.state == UpdateState.updateAvailable)
-          Tooltip(
-            message:
+          KitButton.primary(
+            'Update',
+            tooltip:
                 'Download ${update.asset.name.isNotEmpty ? update.asset.name : 'the new version'}',
-            child: FilledButton(
-                onPressed: () => app.applyUpdate(path), child: const Text('Update')),
+            onPressed: () => app.applyUpdate(path),
           ),
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.more_horiz),
-          tooltip: 'More actions',
-          onSelected: (action) {
-            switch (action) {
-              case 'run':
-                app.launch(path);
-              case 'check':
-                app.checkUpdate(path);
-              case 'source':
-                _editSource();
-              case 'move':
-                app.moveToCentral([path]);
-              case 'menu':
-                app.toggleMenuEntry(path);
-              case 'delete':
-                _confirmDelete();
-            }
-          },
-          itemBuilder: (_) => [
-            PopupMenuItem(value: 'run', enabled: !missing, child: const Text('Run')),
-            PopupMenuItem(
-                value: 'check', enabled: !missing && !busy, child: const Text('Check for updates')),
-            const PopupMenuItem(value: 'source', child: Text('Update source…')),
-            const PopupMenuDivider(),
+        KitMenu(
+          items: () => [
+            KitMenuItem('Run', onSelected: missing ? null : () => app.launch(path)),
+            KitMenuItem('Check for updates',
+                onSelected: missing || busy ? null : () => app.checkUpdate(path)),
+            KitMenuItem('Update source…', onSelected: _editSource),
+            const KitMenuDivider(),
             if (needsMove(path))
-              PopupMenuItem(
-                value: 'move',
-                enabled: !busy,
-                child: Text('Move to ${tildify(defaultInstallDir())}'),
-              ),
-            PopupMenuItem(
-              value: 'menu',
-              enabled: !missing,
-              child: Text(isIntegrated(path) ? 'Remove from app menu' : 'Add to app menu'),
-            ),
-            PopupMenuItem(
-              value: 'delete',
-              child: Text('Delete…', style: TextStyle(color: scheme.error)),
-            ),
+              KitMenuItem('Move to ${tildify(defaultInstallDir())}',
+                  onSelected: busy ? null : () => app.moveToCentral([path])),
+            KitMenuItem(isIntegrated(path) ? 'Remove from app menu' : 'Add to app menu',
+                onSelected: missing ? null : () => app.toggleMenuEntry(path)),
+            KitMenuItem('Delete…', danger: true, onSelected: _confirmDelete),
           ],
+          builder: (context, toggle, _) =>
+              KitIconButton(Icons.more_horiz, tooltip: 'More actions', onPressed: toggle),
         ),
       ]),
     );
@@ -616,19 +583,15 @@ class _BrowsePageState extends State<_BrowsePage> {
       children: [
         Row(children: [
           Expanded(
-            child: Tooltip(
+            child: KitTooltip(
               message: app.source.isCatalog
                   ? 'Filter the ${app.source} catalog'
                   : 'Press Enter to search GitHub',
-              child: TextField(
+              child: KitTextField(
                 controller: _query,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  prefixIcon: Icon(Icons.search),
-                  border: OutlineInputBorder(),
-                  hintText: 'Search',
-                ),
+                prefixIcon: Icons.search,
+                hint: 'Search',
                 onChanged: app.setQuery,
                 onSubmitted: (_) {
                   if (!app.source.isCatalog) app.searchGitHub();
@@ -637,34 +600,26 @@ class _BrowsePageState extends State<_BrowsePage> {
             ),
           ),
           const SizedBox(width: 8),
-          Tooltip(
+          KitTooltip(
             message: 'AppImageHub: the community catalog · pkgforge-dev: self-contained '
                 'Anylinux AppImages that run on any distro · GitHub: search all repositories',
-            child: DropdownButton<CatalogSource>(
+            child: KitSelect<CatalogSource>(
               value: app.source,
-              items: [
-                for (final s in CatalogSource.values)
-                  DropdownMenuItem(value: s, child: Text(s.label)),
-              ],
-              onChanged: (s) {
-                if (s != null) app.selectSource(s);
-              },
+              options: [for (final s in CatalogSource.values) (s, s.label)],
+              onChanged: app.selectSource,
             ),
           ),
         ]),
         const SizedBox(height: 8),
         if (loading)
           Row(children: [
-            const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+            const KitSpinner(),
             const SizedBox(width: 8),
-            Text(
-                app.source.isCatalog
-                    ? 'Loading the ${app.source} catalog…'
-                    : 'Searching GitHub…',
+            Text(app.source.isCatalog ? 'Loading the ${app.source} catalog…' : 'Searching GitHub…',
                 style: _dim(context)),
           ]),
         if (app.searchError.isNotEmpty)
-          Text(app.searchError, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          Text(app.searchError, style: TextStyle(color: KitTheme.of(context).danger)),
         if (items.isEmpty)
           Expanded(
             child: Center(
@@ -691,12 +646,10 @@ class _BrowsePageState extends State<_BrowsePage> {
           ),
           const SizedBox(height: 4),
           Expanded(
-            child: Card(
-              clipBehavior: Clip.antiAlias,
-              margin: EdgeInsets.zero,
+            child: KitPanel(
               child: ListView.separated(
                 itemCount: items.length < maxResults ? items.length : maxResults,
-                separatorBuilder: (_, __) => const Divider(height: 1),
+                separatorBuilder: (_, __) => const KitDivider(),
                 itemBuilder: (_, i) => _CatalogRow(app, items[i], installed),
               ),
             ),
@@ -724,7 +677,7 @@ class _CatalogRow extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(item.name, style: _heading(context), overflow: TextOverflow.ellipsis),
             if (item.summary.isNotEmpty)
-              Tooltip(
+              KitTooltip(
                 message: item.summary,
                 child: Text(item.summary, overflow: TextOverflow.ellipsis),
               ),
@@ -732,31 +685,30 @@ class _CatalogRow extends StatelessWidget {
                 style: _dim(context, small: true), overflow: TextOverflow.ellipsis),
           ]),
         ),
-        Tooltip(
-          message: 'Open github.com/$repo',
-          child: TextButton(
-            onPressed: () => Process.start('xdg-open', ['https://github.com/$repo'],
-                mode: ProcessStartMode.detached, environment: childEnvironment()),
-            child: const Text('GitHub'),
-          ),
+        KitButton.ghost(
+          'GitHub',
+          tooltip: 'Open github.com/$repo',
+          onPressed: () => Process.start('xdg-open', ['https://github.com/$repo'],
+              mode: ProcessStartMode.detached, environment: childEnvironment()),
         ),
         const SizedBox(width: 6),
         if (installed.contains(repo.toLowerCase()))
-          const FilledButton(onPressed: null, child: Text('Installed'))
+          const KitButton.primary('Installed', onPressed: null)
         else if (progress != null && progress < 0)
-          const Tooltip(
+          const KitTooltip(
             message: 'Looking for the latest release…',
-            child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+            child: KitSpinner(size: 18),
           )
         else if (progress != null)
-          Tooltip(
+          KitTooltip(
             message: 'Downloading…',
-            child: SizedBox(width: 80, child: LinearProgressIndicator(value: progress)),
+            child: SizedBox(width: 80, child: KitProgressBar(value: progress)),
           )
         else
-          Tooltip(
-            message: 'Download the latest AppImage release into ${tildify(defaultInstallDir())}',
-            child: FilledButton(onPressed: () => app.install(item), child: const Text('Install')),
+          KitButton.primary(
+            'Install',
+            tooltip: 'Download the latest AppImage release into ${tildify(defaultInstallDir())}',
+            onPressed: () => app.install(item),
           ),
       ]),
     );
